@@ -111,7 +111,7 @@ ifeq ($(UNAME),Linux)
 else
 		./OpenDolBoot.exe $(OUTPUT).dol ../Installer/data/priiloader.app
 endif
-	wiiload $(OUTPUT).elf
+#	wiiload $(OUTPUT).elf
 
 #---------------------------------------------------------------------------------
 clean:

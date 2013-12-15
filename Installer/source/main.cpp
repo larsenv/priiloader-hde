@@ -24,6 +24,11 @@ Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
 #define TITLE_LOWER(x) (u32)(x & 0xFFFFFFFF)
 #define ALIGN32(x) (((x) + 31) & ~31)
 
+#define DOLPHIN
+
+// Values for DetectInput
+#define DI_BUTTONS_HELD		0
+#define DI_BUTTONS_DOWN		1
 
 #include <stdarg.h>
 #include <stdio.h>
@@ -40,6 +45,8 @@ Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
 #include <ogc/isfs.h>
 #include <ogc/ios.h>
 #include <ogc/usbgecko.h>
+
+#include <runtimeiospatch/runtimeiospatch.h>
 
 #ifdef BETA
 #include <debug.h>
@@ -86,6 +93,72 @@ typedef struct
 	u8 otherperm;
 } ATTRIBUTE_PACKED Nand_Permissions;
 
+/*
+This greatly cuts down on the functions called by only checking values under
+certain circumstances, such as if a controller is present.
+
+Thanks to megazig for reminding me to support multiple key presses.
+*/
+u32 DetectInput(u8 DownOrHeld) {
+	u32 pressed = 0;
+	// Wii Remote (and Classic Controller) take precedence over GC to save time
+	if (WPAD_ScanPads() > WPAD_ERR_NONE) // Scan the Wii remotes.  If there any problems, skip checking buttons
+	{
+		if (DownOrHeld == DI_BUTTONS_DOWN) {
+			pressed = WPAD_ButtonsDown(0) | WPAD_ButtonsDown(1) | WPAD_ButtonsDown(2) | WPAD_ButtonsDown(3); //Store pressed buttons
+		} else {
+			pressed = WPAD_ButtonsHeld(0) | WPAD_ButtonsHeld(1) | WPAD_ButtonsHeld(2) | WPAD_ButtonsHeld(3); //Store pressed buttons
+		}
+		
+		// Convert to wiimote values
+		if (pressed & WPAD_CLASSIC_BUTTON_ZR) pressed |= WPAD_BUTTON_PLUS;
+		if (pressed & WPAD_CLASSIC_BUTTON_ZL) pressed |= WPAD_BUTTON_MINUS;
+
+		if (pressed & WPAD_CLASSIC_BUTTON_PLUS) pressed |= WPAD_BUTTON_PLUS;
+		if (pressed & WPAD_CLASSIC_BUTTON_MINUS) pressed |= WPAD_BUTTON_MINUS;
+
+		if (pressed & WPAD_CLASSIC_BUTTON_A) pressed |= WPAD_BUTTON_A;
+		if (pressed & WPAD_CLASSIC_BUTTON_B) pressed |= WPAD_BUTTON_B;
+		if (pressed & WPAD_CLASSIC_BUTTON_X) pressed |= WPAD_BUTTON_2;
+		if (pressed & WPAD_CLASSIC_BUTTON_Y) pressed |= WPAD_BUTTON_1;
+		if (pressed & WPAD_CLASSIC_BUTTON_HOME) pressed |= WPAD_BUTTON_HOME;
+		
+		if (pressed & WPAD_CLASSIC_BUTTON_UP) pressed |= WPAD_BUTTON_UP;
+		if (pressed & WPAD_CLASSIC_BUTTON_DOWN) pressed |= WPAD_BUTTON_DOWN;
+		if (pressed & WPAD_CLASSIC_BUTTON_LEFT) pressed |= WPAD_BUTTON_LEFT;
+		if (pressed & WPAD_CLASSIC_BUTTON_RIGHT) pressed |= WPAD_BUTTON_RIGHT;
+	}
+
+	// Return Classic Controller and Wii Remote values
+	if (pressed) return pressed;
+	
+	// No buttons on the Wii remote or Classic Controller were pressed
+	if (PAD_ScanPads() > PAD_ERR_NONE)
+	{
+		if (DownOrHeld == DI_BUTTONS_HELD) {
+			pressed = PAD_ButtonsDown(0) | PAD_ButtonsDown(1) | PAD_ButtonsDown(2) | PAD_ButtonsDown(3); //Store pressed buttons
+		} else {
+			pressed = PAD_ButtonsHeld(0) | PAD_ButtonsHeld(1) | PAD_ButtonsHeld(2) | PAD_ButtonsHeld(3); //Store pressed buttons
+		}
+		
+		if (pressed) {
+			// Button on GC controller was pressed
+			if (pressed & PAD_TRIGGER_R) pressed |= WPAD_BUTTON_PLUS;
+			if (pressed & PAD_TRIGGER_L) pressed |= WPAD_BUTTON_MINUS;
+			if (pressed & PAD_BUTTON_A) pressed |= WPAD_BUTTON_A;
+			if (pressed & PAD_BUTTON_B) pressed |= WPAD_BUTTON_B;
+			if (pressed & PAD_BUTTON_X) pressed |= WPAD_BUTTON_1;
+			if (pressed & PAD_BUTTON_Y) pressed |= WPAD_BUTTON_2;
+			if (pressed & PAD_BUTTON_MENU) pressed |= WPAD_BUTTON_HOME;
+			if (pressed & PAD_BUTTON_UP) pressed |= WPAD_BUTTON_UP;
+			if (pressed & PAD_BUTTON_LEFT) pressed |= WPAD_BUTTON_LEFT;
+			if (pressed & PAD_BUTTON_DOWN) pressed |= WPAD_BUTTON_DOWN;
+			if (pressed & PAD_BUTTON_RIGHT) pressed |= WPAD_BUTTON_RIGHT;
+		}
+	}
+	return pressed;
+}
+
 void gprintf( const char *str, ... )
 {
 	if(!GeckoFound)
@@ -113,6 +186,28 @@ void CheckForGecko( void )
 	}
 	return;
 }
+
+bool CheckvWii (void) {
+	#ifdef DOLPHIN
+	return false;
+	#endif
+	// Check Device ID
+	u32 deviceID = 0;
+	ES_GetDeviceID(&deviceID);
+	// If it is greater than or equal to 0x20000000 (536870912), then you are running on a Wii U
+	return (deviceID >= 536870912);
+} // CheckvWii
+
+bool LoadIOS(int argc, char **argv) {
+	int i;
+	for (i = 0; i < argc; i++) {
+		if (!strncmp("--ios=",argv[i],6)) {
+			return ((IOS_ReloadIOS(atoi(strchr(argv[i],'=')+1))) >= 0 );
+		}
+	}
+	return false;
+}
+
 void sleepx (int seconds)
 {
 	time_t start;
@@ -486,23 +581,20 @@ free_and_Return:
 }
 bool UserYesNoStop()
 {
-	u16 pDown;
-	u16 GCpDown;
+	u32 pDown;
+	
 	while(1)
 	{
-		WPAD_ScanPads();
-		PAD_ScanPads();
-		pDown = WPAD_ButtonsDown(0);
-		GCpDown = PAD_ButtonsDown(0);
-		if (pDown & WPAD_BUTTON_A || GCpDown & PAD_BUTTON_A)
+		pDown = DetectInput(DI_BUTTONS_DOWN);
+		if (pDown & WPAD_BUTTON_A)
 		{
 			return true;
 		}
-		if (pDown & WPAD_BUTTON_B || GCpDown & PAD_BUTTON_B)
+		if (pDown & WPAD_BUTTON_B)
 		{
 			return false;
 		}
-		if (pDown & WPAD_BUTTON_HOME || GCpDown & PAD_BUTTON_START)
+		if (pDown & WPAD_BUTTON_HOME)
 		{
 			abort("User command");
 			break;
@@ -1319,6 +1411,8 @@ int main(int argc, char **argv)
 	CheckForGecko();
 	VIDEO_Init();
 
+	__ES_Init();
+	
 	vmode = VIDEO_GetPreferredMode(NULL);
 	xfb = MEM_K0_TO_K1(SYS_AllocateFramebuffer(vmode));
 
@@ -1349,10 +1443,20 @@ int main(int argc, char **argv)
 	free((void*)0x1);
 	memcpy((void*)0x0,(void*)0x1,5);*/
 	//return 0;
+	
+	LoadIOS(argc, argv);
+	
+	if (AHBPROT_DISABLED) {
+		IosPatch_RUNTIME(true, false, false, false);
+		printf("\nPatched IOS%dv%d on-the-fly\n",IOS_GetVersion(),IOS_GetRevision());
+	}
+
 	//reload ios so that IF the user started this with AHBPROT we lose everything from HBC. also, IOS36 is the most patched ios :')
-	IOS_ReloadIOS(36);
+	//But Joostin doesn't do that
+	//IOS_ReloadIOS(36);
+	
 	printf("\nIOS %d rev %d\n\n",IOS_GetVersion(),IOS_GetRevision());
-	printf("\tPriiloader rev %d (preloader v0.30 mod) Installation / Removal Tool\n\n\n\n\t",SVN_REV);
+	printf("\tPriiloader rev %s (preloader v0.30 mod) Installation / Removal Tool\n\n\n\n\t",SVN_REV_STR);
 	printf("\t\t\t\t\tPLEASE READ THIS CAREFULLY\n\n\t");
 	printf("\t\tTHIS PROGRAM/TOOL COMES WITHOUT ANY WARRANTIES!\n\t");
 	printf("\t\tYOU ACCEPT THAT YOU INSTALL THIS AT YOUR OWN RISK\n\n\n\t");
@@ -1363,7 +1467,7 @@ int main(int argc, char **argv)
 	u32 keyId = 0;
 	ret = ES_Identify( (signed_blob*)certs_bin, certs_bin_size, (signed_blob*)su_tmd, su_tmd_size, (signed_blob*)su_tik, su_tik_size, &keyId);
 	gprintf("ES_Identify : %d\n",ret);
-	if(ret < 0)
+	if(ret < 0 && ret != -1029)
 	{
 		printf("\x1b[2J");
 		fflush(stdout);
@@ -1387,7 +1491,7 @@ int main(int argc, char **argv)
 	{
 		printf("\x1b[2J");
 		fflush(stdout);
-		printf("Failed to retrieve nand permissions from nand!IOS 36 isn't patched!\n");
+		printf("Failed to retrieve nand permissions from nand!IOS%d isn't patched!\n", IOS_GetVersion());
 		sleepx(5);
 		exit(0);
 	}
@@ -1440,24 +1544,30 @@ int main(int argc, char **argv)
 	WPAD_Init();
 	PAD_Init();
 	sleepx(2);
-
-	printf("\r\t\t\t   Press (+/A) to install or update Priiloader\n\t");
-	printf("\tPress (-/Y) to remove Priiloader and restore system menu\n\t");
+	
+	if (CheckvWii()) {
+		// Turn text red
+		printf("\x1b[31;1m");
+		printf("\n\n\t   Error: you are running this on a Wii U.  Installation would");
+		printf("\n\t\t\t\t\t\tresult in a full brick!");
+		sleepx(8);
+		exit(0);
+	}
+	
+	printf("\r\t\t\t   Press (+/R) to install or update Priiloader\n\t");
+	printf("\tPress (-/L) to remove Priiloader and restore system menu\n\t");
 	if( (ios_patched < 1) && (IOS_GetVersion() != 36 ) )
 		printf("  Hold Down (B) with any above options to use IOS36\n\t");
 	printf("\tPress (HOME/Start) to chicken out and quit the installer!\n\n\t");
 	printf("\t\t\t\t\tEnjoy! DacoTaco & BadUncle\n");
 	while(1)
 	{
-		WPAD_ScanPads();
-		PAD_ScanPads();
-		u16 pDown = WPAD_ButtonsDown(0);
-		u16 GCpDown = PAD_ButtonsDown(0);
-		u16 pHeld = WPAD_ButtonsHeld(0);
-		u16 GCpHeld = PAD_ButtonsHeld(0);
-		if (pDown & WPAD_BUTTON_PLUS || pDown & WPAD_BUTTON_MINUS || GCpDown & PAD_BUTTON_A || GCpDown & PAD_BUTTON_Y)
+		u32 pDown = DetectInput(DI_BUTTONS_DOWN);
+		u32 pHeld = DetectInput(DI_BUTTONS_HELD);
+		
+		if (pDown & WPAD_BUTTON_PLUS || pDown & WPAD_BUTTON_MINUS)
 		{
-			if (pHeld & WPAD_BUTTON_B || GCpHeld & PAD_BUTTON_B )
+			if (pHeld & WPAD_BUTTON_B)
 			{
 				if((ios_patched < 1) && (IOS_GetVersion() != 36 ) )
 				{
@@ -1470,7 +1580,7 @@ int main(int argc, char **argv)
 					{
 						printf("\x1b[2J");
 						fflush(stdout);
-						printf("Failed to retrieve nand permissions from nand!ios 36 isn't patched!\n");
+						printf("Failed to retrieve nand permissions from NAND! IOS36 isn't patched!\n");
 						sleepx(5);
 						exit(0);
 					}
@@ -1478,12 +1588,12 @@ int main(int argc, char **argv)
         	}
     	}
 
-		if (pDown & WPAD_BUTTON_PLUS || GCpDown & PAD_BUTTON_A)
+		if (pDown & WPAD_BUTTON_PLUS)
 		{
 			//install Priiloader
 			printf("\x1b[2J");
 			fflush(stdout);
-			printf("IOS %d rev %d\n\n\n",IOS_GetVersion(),IOS_GetRevision());
+			printf("IOS%dv%d\n\n\n",IOS_GetVersion(),IOS_GetRevision());
 #ifdef BETA
 			printf("\x1b[%u;%dm", 33, 1);
 			printf("\nWARNING : ");
@@ -1519,11 +1629,11 @@ int main(int argc, char **argv)
 			exit(0);
 
 		}
-		else if (pDown & WPAD_BUTTON_MINUS || GCpDown & PAD_BUTTON_Y )
+		else if (pDown & WPAD_BUTTON_MINUS)
 		{
 			printf("\x1b[2J");
 			fflush(stdout);
-			printf("IOS %d rev %d\n\n\n",IOS_GetVersion(),IOS_GetRevision());
+			printf("IOS%dv%d\n\n\n",IOS_GetVersion(),IOS_GetRevision());
 			printf("Checking for Priiloader...\n");
 			fd = ISFS_Open(copy_app,ISFS_OPEN_RW);
 			if (fd < 0)
@@ -1544,7 +1654,7 @@ int main(int argc, char **argv)
 				exit(0);
 			}
 		}
-		if ( GCpDown & PAD_BUTTON_START || pDown & WPAD_BUTTON_HOME) 
+		if (pDown & WPAD_BUTTON_HOME) 
 		{
 			printf("\x1b[5;0H");
 			fflush(stdout);

@@ -42,6 +42,7 @@ typedef struct {
 	u8 PasscheckPriiloader;
 	u8 PasscheckMenu;
 	u8 ShowBetaUpdates;
+	u8 UseClassicHacks;
 } ATTRIBUTE_ALIGN(32) Settings;
 
 enum {
@@ -59,6 +60,7 @@ enum {
 		SETTING_PASSCHECKPRII,
 		SETTING_PASSCHECKMENU,
 		SETTING_SHOWBETAUPDATES,
+		SETTING_CLASSIC_HACKS
 };
 
 enum {

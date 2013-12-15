@@ -166,10 +166,10 @@ static s32 __USB_CtrlMsgTimeout(usbstorage_handle *dev, u8 bmRequestType, u8 bmR
 {
 	u32 level;
 	s32 retval;
-	struct timespec ts;
+	//struct timespec ts;
 
-	ts.tv_sec = 2;
-	ts.tv_nsec = 0;
+	//ts.tv_sec = 2;
+	//ts.tv_nsec = 0;
 
 	dev->retval = USBSTORAGE_PROCESSING;
 	retval = USB_WriteCtrlMsgAsync(dev->usb_fd, bmRequestType, bmRequest, wValue, wIndex, wLength, rpData, __usb_blkmsg_cb, (void *)dev);

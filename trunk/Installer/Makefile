@@ -38,7 +38,7 @@ LDFLAGS	=	-g $(MACHDEP) -Wl,-Map,$(notdir $@).map,--section-start,.init=0x800050
 #---------------------------------------------------------------------------------
 # any extra libraries we wish to link with the project
 #---------------------------------------------------------------------------------
-LIBS	:=	-ldb -lwiiuse -lbte -logc -lfat
+LIBS	:=	-ldb -lwiiuse -lbte -logc -lfat -lruntimeiospatch
 
 #---------------------------------------------------------------------------------
 # list of directories containing libraries, this must be the top level containing
@@ -104,7 +104,6 @@ export OUTPUT	:=	$(CURDIR)/$(TARGET)
 $(BUILD):
 	@[ -d $@ ] || mkdir -p $@
 	@make --no-print-directory -C $(BUILD) -f $(CURDIR)/Makefile
-	wiiload $(OUTPUT).dol
 
 #---------------------------------------------------------------------------------
 clean:

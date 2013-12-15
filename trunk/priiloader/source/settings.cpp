@@ -172,6 +172,8 @@ u32 SGetSetting( u32 s )
 			return settings->PasscheckMenu;
 		case SETTING_SHOWBETAUPDATES:
 			return settings->ShowBetaUpdates;
+		case SETTING_CLASSIC_HACKS:
+			return settings->UseClassicHacks;
 		default:
 			return 0;
 		break;

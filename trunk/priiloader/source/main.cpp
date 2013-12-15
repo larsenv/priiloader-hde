@@ -19,9 +19,10 @@ Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
 
 
 */
-//#define DEBUG
+#define DEBUG
 #define MAGIC_WORD_ADDRESS_1 0x8132FFFB
 #define MAGIC_WORD_ADDRESS_2 0x817FEFF0
+#define TEXT_OFFSET(X) ((((rmode->viWidth) / 2 ) - (sizeof((X))*13/2))>>1)
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -58,7 +59,6 @@ Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
 #include "dvd.h"
 #include "titles.h"
 #include "mem2_manager.h"
-
 
 //Bin includes
 #include "certs_bin.h"
@@ -97,8 +97,11 @@ typedef struct {
 extern DVD_status DVD_state;
 extern Settings *settings;
 extern u8 error;
+extern std::vector<hack> hacks;
 extern std::vector<hack_hash> hacks_hash;
+extern u32 *states;
 extern u32 *states_hash;
+extern s8 Mounted;
 
 typedef struct wii_state {
 	s8 Shutdown:2;
@@ -118,6 +121,65 @@ s32 __IOS_LoadStartupIOS()
 {
 	return 0;
 }
+
+
+/*
+This greatly cuts down on the functions called by only checking values under
+certain circumstances, such as if a controller is present.
+
+Thanks to megazig for reminding me to support multiple key presses.
+*/
+u32 DetectInput(void) {
+	u32 pressed = 0;
+	// Wii Remote (and Classic Controller) take precedence over GC to save time
+	if (WPAD_ScanPads() > WPAD_ERR_NONE) // Scan the Wii remotes.  If there any problems, skip checking buttons
+	{
+		pressed = WPAD_ButtonsDown(0) | WPAD_ButtonsDown(1) | WPAD_ButtonsDown(2) | WPAD_ButtonsDown(3); //Store pressed buttons
+
+		// Convert to wiimote values
+		if (pressed & WPAD_CLASSIC_BUTTON_ZR) pressed |= WPAD_BUTTON_PLUS;
+		if (pressed & WPAD_CLASSIC_BUTTON_ZL) pressed |= WPAD_BUTTON_MINUS;
+
+		if (pressed & WPAD_CLASSIC_BUTTON_PLUS) pressed |= WPAD_BUTTON_PLUS;
+		if (pressed & WPAD_CLASSIC_BUTTON_MINUS) pressed |= WPAD_BUTTON_MINUS;
+
+		if (pressed & WPAD_CLASSIC_BUTTON_A) pressed |= WPAD_BUTTON_A;
+		if (pressed & WPAD_CLASSIC_BUTTON_B) pressed |= WPAD_BUTTON_B;
+		if (pressed & WPAD_CLASSIC_BUTTON_X) pressed |= WPAD_BUTTON_2;
+		if (pressed & WPAD_CLASSIC_BUTTON_Y) pressed |= WPAD_BUTTON_1;
+		if (pressed & WPAD_CLASSIC_BUTTON_HOME) pressed |= WPAD_BUTTON_HOME;
+		
+		if (pressed & WPAD_CLASSIC_BUTTON_UP) pressed |= WPAD_BUTTON_UP;
+		if (pressed & WPAD_CLASSIC_BUTTON_DOWN) pressed |= WPAD_BUTTON_DOWN;
+		if (pressed & WPAD_CLASSIC_BUTTON_LEFT) pressed |= WPAD_BUTTON_LEFT;
+		if (pressed & WPAD_CLASSIC_BUTTON_RIGHT) pressed |= WPAD_BUTTON_RIGHT;
+	}
+
+	// Return Classic Controller and Wii Remote values
+	if (pressed) return pressed;
+	
+	// No buttons on the Wii remote or Classic Controller were pressed
+	if (PAD_ScanPads() > PAD_ERR_NONE)
+	{
+		pressed = PAD_ButtonsDown(0) | PAD_ButtonsDown(1) | PAD_ButtonsDown(2) | PAD_ButtonsDown(3);
+		if (pressed) {
+			// Button on GC controller was pressed
+			if (pressed & PAD_TRIGGER_R) pressed |= WPAD_BUTTON_PLUS;
+			if (pressed & PAD_TRIGGER_L) pressed |= WPAD_BUTTON_MINUS;
+			if (pressed & PAD_BUTTON_A) pressed |= WPAD_BUTTON_A;
+			if (pressed & PAD_BUTTON_B) pressed |= WPAD_BUTTON_B;
+			if (pressed & PAD_BUTTON_X) pressed |= WPAD_BUTTON_1;
+			if (pressed & PAD_BUTTON_Y) pressed |= WPAD_BUTTON_2;
+			if (pressed & PAD_BUTTON_MENU) pressed |= WPAD_BUTTON_HOME;
+			if (pressed & PAD_BUTTON_UP) pressed |= WPAD_BUTTON_UP;
+			if (pressed & PAD_BUTTON_LEFT) pressed |= WPAD_BUTTON_LEFT;
+			if (pressed & PAD_BUTTON_DOWN) pressed |= WPAD_BUTTON_DOWN;
+			if (pressed & PAD_BUTTON_RIGHT) pressed |= WPAD_BUTTON_RIGHT;
+		}
+	}
+	return pressed;
+}
+
 u8 DetectHBC( void )
 {
     u64 *list;
@@ -301,6 +363,292 @@ bool isIOSstub(u8 ios_number)
 	mem_free(ios_tmd);
 	return false;
 }
+
+void SysHackSettings( void )
+{
+	if( !LoadHacks(false) )
+	{
+		if(Mounted == 0)
+		{
+			PrintFormat( 1, TEXT_OFFSET("Failed to mount FAT device"), 208+16, "Failed to mount FAT device");
+		}
+		else
+		{
+			PrintFormat( 1, TEXT_OFFSET("Can't find fat:/apps/priiloader/hacks.ini"), 208+16, "Can't find fat:/apps/priiloader/hacks.ini");
+		}
+		PrintFormat( 1, TEXT_OFFSET("Can't find Hacks.ini on NAND"), 208+16+16, "Can't find Hacks.ini on NAND");
+		sleep(5);
+		return;
+	}
+
+//Count hacks for current sys version
+	u32 HackCount=0;
+	u32 SysVersion=GetSysMenuVersion();
+	for( unsigned int i=0; i<hacks.size(); ++i)
+	{
+		if( hacks[i].version == SysVersion )
+		{
+			HackCount++;
+		}
+	}
+
+	if( HackCount == 0 )
+	{
+		PrintFormat( 1, TEXT_OFFSET("Couldn't find any hacks for"), 208, "Couldn't find any hacks for");
+		PrintFormat( 1, TEXT_OFFSET("System Menu version:vxxx"), 228, "System Menu version:v%d", SysVersion );
+		sleep(5);
+		return;
+	}
+
+	u32 DispCount=HackCount;
+
+	if( DispCount > 25 )
+		DispCount = 25;
+
+	u16 cur_off=0;
+	s32 menu_off=0;
+	bool redraw=true;
+ 
+	while(1)
+	{
+		
+		u32 WPAD_Pressed = DetectInput();
+
+#ifdef DEBUG
+		if (WPAD_Pressed & WPAD_BUTTON_HOME) exit(0);
+#endif
+		if ( WPAD_Pressed & WPAD_BUTTON_B) break;
+
+		if ( WPAD_Pressed & WPAD_BUTTON_A )
+		{
+			if( cur_off == DispCount)
+			{
+				//first try to open the file on the SD card/USB, if we found it copy it, other wise skip
+				s16 fail = 0;
+				FILE *in = NULL;
+				if (Mounted != 0)
+				{
+					in = fopen ("fat:/apps/priiloader/hacks.ini","rb");
+				}
+				else
+				{
+					gprintf("no FAT device found\n");
+				}
+				if ( ( (Mounted & 2) && !__io_wiisd.isInserted() ) || ( (Mounted & 1) && !__io_usbstorage.isInserted() ) )
+				{
+					PrintFormat( 0, 103, rmode->viHeight-48, "saving failed : SD/USB error");
+					continue;
+				}
+				if( in != NULL )
+				{
+					//Read in whole file & create it on nand
+					fseek( in, 0, SEEK_END );
+					u32 size = ftell(in);
+					fseek( in, 0, 0);
+
+					char *buf = (char*)mem_align( 32, ALIGN32(size) );
+					memset( buf, 0, size );
+					fread( buf, sizeof( char ), size, in );
+
+					fclose(in);
+
+					s32 fd = ISFS_Open("/title/00000001/00000002/data/hacks.ini", 1|2 );
+					if( fd >= 0 )
+					{
+						//File already exists, delete and recreate!
+						ISFS_Close( fd );
+						if(ISFS_Delete("/title/00000001/00000002/data/hacks.ini") <0)
+						{
+							fail=1;
+							mem_free(buf);
+							goto handle_hacks_fail;
+						}
+					}
+					if(ISFS_CreateFile("/title/00000001/00000002/data/hacks.ini", 0, 3, 3, 3)<0)
+					{
+						fail=2;
+						mem_free(buf);
+						goto handle_hacks_fail;
+					}
+					fd = ISFS_Open("/title/00000001/00000002/data/hacks.ini", 1|2 );
+					if( fd < 0 )
+					{
+						fail=3;
+						ISFS_Close( fd );
+						mem_free(buf);
+						goto handle_hacks_fail;
+					}
+
+					if(ISFS_Write( fd, buf, size )<0)
+					{
+						fail = 4;
+						ISFS_Close( fd );
+						mem_free(buf);
+						goto handle_hacks_fail;
+					}
+					ISFS_Close( fd );
+					mem_free(buf);
+				}
+handle_hacks_fail:
+				if(fail > 0)
+				{
+					gprintf("hacks.ini save error %d\n",fail);
+				}
+				
+				s32 fd = ISFS_Open("/title/00000001/00000002/data/hacks_s.ini", 1|2 );
+
+				if( fd >= 0 )
+				{
+					//File already exists, delete and recreate!
+					ISFS_Close( fd );
+					if(ISFS_Delete("/title/00000001/00000002/data/hacks_s.ini")<0)
+					{
+						fail = 5;
+						goto handle_hacks_s_fail;
+					}
+				}
+
+				if(ISFS_CreateFile("/title/00000001/00000002/data/hacks_s.ini", 0, 3, 3, 3)<0)
+				{
+					fail = 6;
+					goto handle_hacks_s_fail;
+				}
+				fd = ISFS_Open("/title/00000001/00000002/data/hacks_s.ini", 1|2 );
+				if( fd < 0 )
+				{
+					fail=7;
+					goto handle_hacks_s_fail;
+				}
+				if(ISFS_Write( fd, states, sizeof( u32 ) * hacks.size() )<0)
+				{
+					fail = 8;
+					ISFS_Close(fd);
+					goto handle_hacks_s_fail;
+				}
+
+				ISFS_Close( fd );
+handle_hacks_s_fail:
+				if(fail > 0)
+				{
+					gprintf("hacks.ini save error %d\n",fail);
+				}
+
+				if( fail )
+					PrintFormat( 0, 118, rmode->viHeight-48, "saving failed");
+				else
+					PrintFormat( 0, 118, rmode->viHeight-48, "settings saved");
+			} 
+			else 
+			{
+
+				s32 j = 0;
+				u32 i = 0;
+				for(i=0; i<hacks.size(); ++i)
+				{
+					if( hacks[i].version == SysVersion )
+					{
+						if( cur_off+menu_off == j++)
+							break;
+					}
+				}
+
+				if(states[i])
+					states[i]=0;
+				else 
+					states[i]=1;
+
+				redraw = true;
+			}
+		}
+
+		if ( WPAD_Pressed & WPAD_BUTTON_DOWN )
+		{
+			cur_off++;
+
+			if( cur_off > DispCount )
+			{
+				cur_off--;
+				menu_off++;
+			}
+
+			if( cur_off+menu_off > (s32)HackCount )
+			{
+				cur_off = 0;
+				menu_off= 0;
+			}
+			
+			redraw=true;
+		} else if ( WPAD_Pressed & WPAD_BUTTON_UP )
+		{
+			if( cur_off == 0 )
+			{
+				if( menu_off > 0 )
+				{
+					cur_off++;
+					menu_off--;
+
+				} else {
+
+					//if( DispCount < 20 )
+					//{
+						cur_off=DispCount;
+						menu_off=(HackCount-DispCount);
+
+					//} else {
+
+					//	cur_off=DispCount;
+					//	menu_off=(HackCount-DispCount)-1;
+
+					//}
+				}
+			}
+			else
+				cur_off--;
+	
+			redraw=true;
+		}
+
+		if( redraw )
+		{
+			//printf("\x1b[2;0HHackCount:%d DispCount:%d cur_off:%d menu_off:%d Hacks:%d   \n", HackCount, DispCount, cur_off, menu_off, hacks.size() );
+			u32 j=0;
+			u32 skip=menu_off;
+			for( u32 i=0; i<hacks.size(); ++i)
+			{
+				if( hacks[i].version == SysVersion )
+				{
+					if( skip > 0 )
+					{
+						skip--;
+					} else {
+
+						PrintFormat( cur_off==j, 16, 48+j*16, "%s", hacks[i].desc );
+
+						if( states[i] )
+							PrintFormat( cur_off==j, 256, 48+j*16, "enabled ", hacks[i].desc);
+						else
+							PrintFormat( cur_off==j, 256, 48+j*16, "disabled", hacks[i].desc);
+						
+						j++;
+					}
+				}
+				if( j >= 25 ) 
+					break;
+			}
+
+			PrintFormat( cur_off==(signed)DispCount, 118, rmode->viHeight-64, "save settings");
+
+			PrintFormat( 0, 103, rmode->viHeight-48, "                            ");
+
+			redraw = false;
+		}
+
+		VIDEO_WaitVSync();
+	}
+
+	return;
+}
+
 s32 ReloadIos(s32 Ios_version,s8* bool_ahbprot_after_reload)
 {
 	//this function would not be possible without tjeuidj releasing his patch. its not that davebaol's patch is less safe, but teuidj's is cleaner. and clean == good
@@ -364,13 +712,13 @@ void SysHackHashSettings( void )
 	{
 		if(GetMountedValue() == 0)
 		{
-			PrintFormat( 1, ((rmode->viWidth /2)-((strlen("Failed to mount FAT device"))*13/2))>>1, 208+16, "Failed to mount FAT device");
+			PrintFormat( 1, TEXT_OFFSET("Failed to mount FAT device"), 208+16, "Failed to mount FAT device");
 		}
 		else
 		{
-			PrintFormat( 1, ((rmode->viWidth /2)-((strlen("Can't find fat:/apps/priiloader/hacks_hash.ini"))*13/2))>>1, 208+16, "Can't find fat:/apps/priiloader/hacks_hash.ini");
+			PrintFormat( 1, TEXT_OFFSET("Can't find fat:/apps/priiloader/hacks_hash.ini"), 208+16, "Can't find fat:/apps/priiloader/hacks_hash.ini");
 		}
-		PrintFormat( 1, ((rmode->viWidth /2)-((strlen("Can't find hacks_hash.ini on NAND"))*13/2))>>1, 208+16+16, "Can't find hacks_hash.ini on NAND");
+		PrintFormat( 1, TEXT_OFFSET("Can't find hacks_hash.ini on NAND"), 208+16+16, "Can't find hacks_hash.ini on NAND");
 		sleep(5);
 		return;
 	}
@@ -388,8 +736,8 @@ void SysHackHashSettings( void )
 
 	if( HackCount == 0 )
 	{
-		PrintFormat( 1, ((rmode->viWidth /2)-((strlen("Couldn't find any hacks for"))*13/2))>>1, 208, "Couldn't find any hacks for");
-		PrintFormat( 1, ((rmode->viWidth /2)-((strlen("System Menu version:vxxx"))*13/2))>>1, 228, "System Menu version:v%d", SysVersion );
+		PrintFormat( 1, TEXT_OFFSET("Couldn't find any hacks for"), 208, "Couldn't find any hacks for");
+		PrintFormat( 1, TEXT_OFFSET("System Menu version:vxxx"), 228, "System Menu version:v%d", SysVersion );
 		sleep(5);
 		return;
 	}
@@ -404,18 +752,11 @@ void SysHackHashSettings( void )
 	bool redraw=true;
 	while(1)
 	{
-		WPAD_ScanPads();
-		PAD_ScanPads();
+		u32 WPAD_Pressed = DetectInput();
 
-		u32 WPAD_Pressed = WPAD_ButtonsDown(0) | WPAD_ButtonsDown(1) | WPAD_ButtonsDown(2) | WPAD_ButtonsDown(3);
-		u32 PAD_Pressed  = PAD_ButtonsDown(0) | PAD_ButtonsDown(1) | PAD_ButtonsDown(2) | PAD_ButtonsDown(3);
+		if ( WPAD_Pressed & WPAD_BUTTON_B ) break;
 
-		if ( WPAD_Pressed & WPAD_BUTTON_B || WPAD_Pressed & WPAD_CLASSIC_BUTTON_B || PAD_Pressed & PAD_BUTTON_B )
-		{
-			break;
-		}
-
-		if ( WPAD_Pressed & WPAD_BUTTON_A || WPAD_Pressed & WPAD_CLASSIC_BUTTON_A || PAD_Pressed & PAD_BUTTON_A )
+		if ( WPAD_Pressed & WPAD_BUTTON_A )
 		{
 			if( cur_off == DispCount)
 			{
@@ -425,6 +766,7 @@ void SysHackHashSettings( void )
 				if (GetMountedValue() != 0)
 				{
 					in = fopen ("fat:/apps/priiloader/hacks_hash.ini","rb");
+					if (in == NULL) in = fopen ("fat:/hacks_hash.ini","rb");
 				}
 				else
 				{
@@ -557,7 +899,7 @@ handle_hacks_s_fail:
 			}
 		}
 
-		if ( WPAD_Pressed & WPAD_BUTTON_DOWN || WPAD_Pressed & WPAD_CLASSIC_BUTTON_DOWN || PAD_Pressed & PAD_BUTTON_DOWN )
+		if ( WPAD_Pressed & WPAD_BUTTON_DOWN )
 		{
 			cur_off++;
 
@@ -574,7 +916,7 @@ handle_hacks_s_fail:
 			}
 			
 			redraw=true;
-		} else if ( WPAD_Pressed & WPAD_BUTTON_UP || WPAD_Pressed & WPAD_CLASSIC_BUTTON_UP || PAD_Pressed & PAD_BUTTON_UP )
+		} else if ( WPAD_Pressed & WPAD_BUTTON_UP )
 		{
 			if( cur_off == 0 )
 			{
@@ -715,13 +1057,9 @@ void SetSettings( void )
 	int redraw=true;
 	while(1)
 	{
-		WPAD_ScanPads();
-		PAD_ScanPads();
+		u32 WPAD_Pressed = DetectInput();
 
-		u32 WPAD_Pressed = WPAD_ButtonsDown(0) | WPAD_ButtonsDown(1) | WPAD_ButtonsDown(2) | WPAD_ButtonsDown(3);
-		u32 PAD_Pressed  = PAD_ButtonsDown(0)  | PAD_ButtonsDown(1)  | PAD_ButtonsDown(2)  | PAD_ButtonsDown(3);
-
-		if ( WPAD_Pressed & WPAD_BUTTON_B || WPAD_Pressed & WPAD_CLASSIC_BUTTON_B || PAD_Pressed & PAD_BUTTON_B )
+		if ( WPAD_Pressed & WPAD_BUTTON_B )
 		{
 			LoadSettings();
 			SetDumpDebug(SGetSetting(SETTING_DUMPGECKOTEXT));
@@ -731,14 +1069,14 @@ void SetSettings( void )
 		{
 			case 0:
 			{
-				if ( WPAD_Pressed & WPAD_BUTTON_LEFT || WPAD_Pressed & WPAD_CLASSIC_BUTTON_LEFT || PAD_Pressed & PAD_BUTTON_LEFT )
+				if ( WPAD_Pressed & WPAD_BUTTON_LEFT )
 				{
 					if( settings->autoboot == AUTOBOOT_DISABLED )
 						settings->autoboot = AUTOBOOT_FILE;
 					else
 						settings->autoboot--;
 					redraw=true;
-				}else if ( WPAD_Pressed & WPAD_BUTTON_RIGHT || WPAD_Pressed & WPAD_CLASSIC_BUTTON_RIGHT || PAD_Pressed & PAD_BUTTON_RIGHT )
+				}else if ( WPAD_Pressed & WPAD_BUTTON_RIGHT )
 				{
 					if( settings->autoboot == AUTOBOOT_FILE )
 						settings->autoboot = AUTOBOOT_DISABLED;
@@ -749,20 +1087,14 @@ void SetSettings( void )
 			} break;
 			case 1:
 			{
-				if ( WPAD_Pressed & WPAD_BUTTON_RIGHT			||
-					 WPAD_Pressed & WPAD_CLASSIC_BUTTON_RIGHT	|| 
-					 PAD_Pressed & PAD_BUTTON_RIGHT				||
-					 WPAD_Pressed & WPAD_BUTTON_A				||
-					 WPAD_Pressed & WPAD_CLASSIC_BUTTON_A		|| 
-					 PAD_Pressed & PAD_BUTTON_A
-					)
+				if ( WPAD_Pressed & WPAD_BUTTON_RIGHT || WPAD_Pressed & WPAD_BUTTON_A )
 				{
 					settings->ReturnTo++;
 					if( settings->ReturnTo > RETURNTO_AUTOBOOT )
 						settings->ReturnTo = RETURNTO_SYSMENU;
 
 					redraw=true;
-				} else if ( WPAD_Pressed & WPAD_BUTTON_LEFT || WPAD_Pressed & WPAD_CLASSIC_BUTTON_LEFT || PAD_Pressed & PAD_BUTTON_LEFT ) {
+				} else if ( WPAD_Pressed & WPAD_BUTTON_LEFT ) {
 
 					if( settings->ReturnTo == RETURNTO_SYSMENU )
 						settings->ReturnTo = RETURNTO_AUTOBOOT;
@@ -776,16 +1108,7 @@ void SetSettings( void )
 			} break;
 			case 2:
 			{
-				if ( WPAD_Pressed & WPAD_BUTTON_LEFT			||
-					 PAD_Pressed & PAD_BUTTON_LEFT				||
-					 WPAD_Pressed & WPAD_CLASSIC_BUTTON_LEFT	|| 
-					 WPAD_Pressed & WPAD_BUTTON_RIGHT			||
-					 PAD_Pressed & PAD_BUTTON_RIGHT				||
-					 WPAD_Pressed & WPAD_CLASSIC_BUTTON_RIGHT	|| 
-					 WPAD_Pressed & WPAD_BUTTON_A				||
-					 WPAD_Pressed & WPAD_CLASSIC_BUTTON_A		|| 
-					 PAD_Pressed & PAD_BUTTON_A
-					)
+				if ( WPAD_Pressed & WPAD_BUTTON_LEFT || WPAD_Pressed & WPAD_BUTTON_RIGHT || WPAD_Pressed & WPAD_BUTTON_A )
 				{
 					if( settings->ShutdownToPreloader )
 						settings->ShutdownToPreloader = 0;
@@ -799,16 +1122,7 @@ void SetSettings( void )
 			} break;
 			case 3:
 			{
-				if ( WPAD_Pressed & WPAD_BUTTON_LEFT			||
-					 PAD_Pressed & PAD_BUTTON_LEFT				||
-					 WPAD_Pressed & WPAD_CLASSIC_BUTTON_LEFT	|| 
-					 WPAD_Pressed & WPAD_BUTTON_RIGHT			||
-					 PAD_Pressed & PAD_BUTTON_RIGHT				||
-					 WPAD_Pressed & WPAD_CLASSIC_BUTTON_RIGHT	|| 
-					 WPAD_Pressed & WPAD_BUTTON_A				||
-					 WPAD_Pressed & WPAD_CLASSIC_BUTTON_A		|| 
-					 PAD_Pressed & PAD_BUTTON_A
-					)
+				if ( WPAD_Pressed & WPAD_BUTTON_LEFT || WPAD_Pressed & WPAD_BUTTON_RIGHT || WPAD_Pressed & WPAD_BUTTON_A )
 				{
 					if( settings->StopDisc )
 						settings->StopDisc = 0;
@@ -821,16 +1135,7 @@ void SetSettings( void )
 			} break;
 			case 4:
 			{
-				if ( WPAD_Pressed & WPAD_BUTTON_LEFT			||
-					 PAD_Pressed & PAD_BUTTON_LEFT				||
-					 WPAD_Pressed & WPAD_CLASSIC_BUTTON_LEFT	|| 
-					 WPAD_Pressed & WPAD_BUTTON_RIGHT			||
-					 PAD_Pressed & PAD_BUTTON_RIGHT				||
-					 WPAD_Pressed & WPAD_CLASSIC_BUTTON_RIGHT	|| 
-					 WPAD_Pressed & WPAD_BUTTON_A				||
-					 WPAD_Pressed & WPAD_CLASSIC_BUTTON_A		|| 
-					 PAD_Pressed & PAD_BUTTON_A
-					)
+				if ( WPAD_Pressed & WPAD_BUTTON_LEFT || WPAD_Pressed & WPAD_BUTTON_RIGHT || WPAD_Pressed & WPAD_BUTTON_A )
 				{
 					if( settings->LidSlotOnError )
 						settings->LidSlotOnError = 0;
@@ -844,16 +1149,7 @@ void SetSettings( void )
 			} break;
 			case 5:
 			{
-				if ( WPAD_Pressed & WPAD_BUTTON_LEFT			||
-					 PAD_Pressed & PAD_BUTTON_LEFT				||
-					 WPAD_Pressed & WPAD_CLASSIC_BUTTON_LEFT	|| 
-					 WPAD_Pressed & WPAD_BUTTON_RIGHT			||
-					 PAD_Pressed & PAD_BUTTON_RIGHT				||
-					 WPAD_Pressed & WPAD_CLASSIC_BUTTON_RIGHT	|| 
-					 WPAD_Pressed & WPAD_BUTTON_A				||
-					 WPAD_Pressed & WPAD_CLASSIC_BUTTON_A		|| 
-					 PAD_Pressed & PAD_BUTTON_A
-					)
+				if ( WPAD_Pressed & WPAD_BUTTON_LEFT || WPAD_Pressed & WPAD_BUTTON_RIGHT || WPAD_Pressed & WPAD_BUTTON_A )
 				{
 					if( settings->IgnoreShutDownMode )
 						settings->IgnoreShutDownMode = 0;
@@ -867,16 +1163,7 @@ void SetSettings( void )
 			} break;
 			case 6:
 			{
-				if ( WPAD_Pressed & WPAD_BUTTON_LEFT			||
-					 PAD_Pressed & PAD_BUTTON_LEFT				||
-					 WPAD_Pressed & WPAD_CLASSIC_BUTTON_LEFT	|| 
-					 WPAD_Pressed & WPAD_BUTTON_RIGHT			||
-					 PAD_Pressed & PAD_BUTTON_RIGHT				||
-					 WPAD_Pressed & WPAD_CLASSIC_BUTTON_RIGHT	|| 
-					 WPAD_Pressed & WPAD_BUTTON_A				||
-					 WPAD_Pressed & WPAD_CLASSIC_BUTTON_A		|| 
-					 PAD_Pressed & PAD_BUTTON_A
-					)
+				if ( WPAD_Pressed & WPAD_BUTTON_LEFT || WPAD_Pressed & WPAD_BUTTON_RIGHT || WPAD_Pressed & WPAD_BUTTON_A )
 				{
 					if( settings->BlackBackground )
 					{
@@ -893,16 +1180,7 @@ void SetSettings( void )
 			break;
 			case 7:
 			{
-				if ( WPAD_Pressed & WPAD_BUTTON_LEFT			||
-					 PAD_Pressed & PAD_BUTTON_LEFT				||
-					 WPAD_Pressed & WPAD_CLASSIC_BUTTON_LEFT	|| 
-					 WPAD_Pressed & WPAD_BUTTON_RIGHT			||
-					 PAD_Pressed & PAD_BUTTON_RIGHT				||
-					 WPAD_Pressed & WPAD_CLASSIC_BUTTON_RIGHT	|| 
-					 WPAD_Pressed & WPAD_BUTTON_A				||
-					 WPAD_Pressed & WPAD_CLASSIC_BUTTON_A		|| 
-					 PAD_Pressed & PAD_BUTTON_A
-					)
+				if ( WPAD_Pressed & WPAD_BUTTON_LEFT || WPAD_Pressed & WPAD_BUTTON_RIGHT || WPAD_Pressed & WPAD_BUTTON_A )
 				{
 					if( settings->PasscheckPriiloader )
 					{
@@ -911,24 +1189,19 @@ void SetSettings( void )
 					else
 					{
 						ClearScreen();
-						PrintFormat( 1, ((rmode->viWidth /2)-((strlen("!!!!!WARNING!!!!!"))*13/2))>>1, 208, "!!!!!WARNING!!!!!");
-						PrintFormat( 1, ((rmode->viWidth /2)-((strlen("Setting Password can lock you out"))*13/2))>>1, 228, "Setting Password can lock you out" );
-						PrintFormat( 1, ((rmode->viWidth /2)-((strlen("off your own wii. proceed? (A = Yes, B = No)"))*13/2))>>1, 248, "off your own wii. proceed? (A = Yes, B = No)" );
+						PrintFormat( 1, TEXT_OFFSET("!!!!!WARNING!!!!!"), 208, "!!!!!WARNING!!!!!");
+						PrintFormat( 1, TEXT_OFFSET("Setting Password can lock you out"), 228, "Setting Password can lock you out" );
+						PrintFormat( 1, TEXT_OFFSET("of your own wii. proceed? (A = Yes, B = No)"), 248, "of your own wii. proceed? (A = Yes, B = No)" );
 						while(1)
 						{
-							WPAD_ScanPads();
-							PAD_ScanPads();
-							u32 WPAD_Pressed = WPAD_ButtonsDown(0) | WPAD_ButtonsDown(1) | WPAD_ButtonsDown(2) | WPAD_ButtonsDown(3);
-							u32 PAD_Pressed  = PAD_ButtonsDown(0)  | PAD_ButtonsDown(1)  | PAD_ButtonsDown(2)  | PAD_ButtonsDown(3);
-							if(WPAD_Pressed & WPAD_BUTTON_A || WPAD_Pressed & WPAD_CLASSIC_BUTTON_A || PAD_Pressed & PAD_BUTTON_A)
+							u32 WPAD_Pressed = DetectInput();
+							
+							if(WPAD_Pressed & WPAD_BUTTON_A)
 							{
 								settings->PasscheckPriiloader = true;
 								break;
 							}
-							else if(WPAD_Pressed & WPAD_BUTTON_B || WPAD_Pressed & WPAD_CLASSIC_BUTTON_B || PAD_Pressed & PAD_BUTTON_B)
-							{
-								break;
-							}
+							else if(WPAD_Pressed & WPAD_BUTTON_B) break;
 							VIDEO_WaitVSync();
 						}
 						ClearScreen();
@@ -940,16 +1213,7 @@ void SetSettings( void )
 			break;
 			case 8:
 			{
-				if ( WPAD_Pressed & WPAD_BUTTON_LEFT			||
-					 PAD_Pressed & PAD_BUTTON_LEFT				||
-					 WPAD_Pressed & WPAD_CLASSIC_BUTTON_LEFT	|| 
-					 WPAD_Pressed & WPAD_BUTTON_RIGHT			||
-					 PAD_Pressed & PAD_BUTTON_RIGHT				||
-					 WPAD_Pressed & WPAD_CLASSIC_BUTTON_RIGHT	|| 
-					 WPAD_Pressed & WPAD_BUTTON_A				||
-					 WPAD_Pressed & WPAD_CLASSIC_BUTTON_A		|| 
-					 PAD_Pressed & PAD_BUTTON_A
-					)
+				if ( WPAD_Pressed & WPAD_BUTTON_LEFT || WPAD_Pressed & WPAD_BUTTON_RIGHT || WPAD_Pressed & WPAD_BUTTON_A )
 				{
 					if( settings->PasscheckMenu )
 					{
@@ -958,24 +1222,18 @@ void SetSettings( void )
 					else
 					{
 						ClearScreen();
-						PrintFormat( 1, ((rmode->viWidth /2)-((strlen("!!!!!WARNING!!!!!"))*13/2))>>1, 208, "!!!!!WARNING!!!!!");
-						PrintFormat( 1, ((rmode->viWidth /2)-((strlen("Setting Password can lock you out"))*13/2))>>1, 228, "Setting Password can lock you out" );
-						PrintFormat( 1, ((rmode->viWidth /2)-((strlen("off your own wii. proceed? (A = Yes, B = No)"))*13/2))>>1, 248, "off your own wii. proceed? (A = Yes, B = No)" );
+						PrintFormat( 1, TEXT_OFFSET("!!!!!WARNING!!!!!"), 208, "!!!!!WARNING!!!!!");
+						PrintFormat( 1, TEXT_OFFSET("Setting Password can lock you out"), 228, "Setting Password can lock you out" );
+						PrintFormat( 1, TEXT_OFFSET("off your own wii. proceed? (A = Yes, B = No)"), 248, "off your own wii. proceed? (A = Yes, B = No)" );
 						while(1)
 						{
-							WPAD_ScanPads();
-							PAD_ScanPads();
-							u32 WPAD_Pressed = WPAD_ButtonsDown(0) | WPAD_ButtonsDown(1) | WPAD_ButtonsDown(2) | WPAD_ButtonsDown(3);
-							u32 PAD_Pressed  = PAD_ButtonsDown(0)  | PAD_ButtonsDown(1)  | PAD_ButtonsDown(2)  | PAD_ButtonsDown(3);
-							if(WPAD_Pressed & WPAD_BUTTON_A || WPAD_Pressed & WPAD_CLASSIC_BUTTON_A || PAD_Pressed & PAD_BUTTON_A)
+							u32 WPAD_Pressed = DetectInput();
+							if(WPAD_Pressed & WPAD_BUTTON_A)
 							{
 								settings->PasscheckMenu = true;
 								break;
 							}
-							else if(WPAD_Pressed & WPAD_BUTTON_B || WPAD_Pressed & WPAD_CLASSIC_BUTTON_B || PAD_Pressed & PAD_BUTTON_B)
-							{
-								break;
-							}
+							else if(WPAD_Pressed & WPAD_BUTTON_B) break;
 							VIDEO_WaitVSync();
 						}
 						ClearScreen();
@@ -985,16 +1243,7 @@ void SetSettings( void )
 			}
 			break;
 			case 9: //show Debug Info
-				if ( WPAD_Pressed & WPAD_BUTTON_LEFT			||
-					 PAD_Pressed & PAD_BUTTON_LEFT				||
-					 WPAD_Pressed & WPAD_CLASSIC_BUTTON_LEFT	|| 
-					 WPAD_Pressed & WPAD_BUTTON_RIGHT			||
-					 PAD_Pressed & PAD_BUTTON_RIGHT				||
-					 WPAD_Pressed & WPAD_CLASSIC_BUTTON_RIGHT	|| 
-					 WPAD_Pressed & WPAD_BUTTON_A				||
-					 WPAD_Pressed & WPAD_CLASSIC_BUTTON_A		|| 
-					 PAD_Pressed & PAD_BUTTON_A
-					)
+				if ( WPAD_Pressed & WPAD_BUTTON_LEFT || WPAD_Pressed & WPAD_BUTTON_RIGHT || WPAD_Pressed & WPAD_BUTTON_A )
 				{
 					if ( settings->DumpGeckoText )
 						settings->DumpGeckoText = 0;			
@@ -1005,16 +1254,7 @@ void SetSettings( void )
 				}
 			break;
 			case 10: //download beta updates
-				if ( WPAD_Pressed & WPAD_BUTTON_LEFT			||
-					 PAD_Pressed & PAD_BUTTON_LEFT				||
-					 WPAD_Pressed & WPAD_CLASSIC_BUTTON_LEFT	|| 
-					 WPAD_Pressed & WPAD_BUTTON_RIGHT			||
-					 PAD_Pressed & PAD_BUTTON_RIGHT				||
-					 WPAD_Pressed & WPAD_CLASSIC_BUTTON_RIGHT	|| 
-					 WPAD_Pressed & WPAD_BUTTON_A				||
-					 WPAD_Pressed & WPAD_CLASSIC_BUTTON_A		|| 
-					 PAD_Pressed & PAD_BUTTON_A
-					)
+				if ( WPAD_Pressed & WPAD_BUTTON_LEFT || WPAD_Pressed & WPAD_BUTTON_RIGHT || WPAD_Pressed & WPAD_BUTTON_A )
 				{
 					if ( settings->ShowBetaUpdates )
 						settings->ShowBetaUpdates = 0;
@@ -1022,19 +1262,16 @@ void SetSettings( void )
 						settings->ShowBetaUpdates = 1;
 					redraw=true;
 				}
-			break;		
-			case 11: //ignore ios reloading for system menu?
+			break;
+			case 11:
+				if ( WPAD_Pressed & WPAD_BUTTON_LEFT || WPAD_Pressed & WPAD_BUTTON_RIGHT || WPAD_Pressed & WPAD_BUTTON_A )
+				{
+					settings->UseClassicHacks = !(settings->UseClassicHacks);
+					redraw=true;
+				} break;	
+			case 12: //ignore ios reloading for system menu?
 			{
-				if ( WPAD_Pressed & WPAD_BUTTON_LEFT			||
-					 PAD_Pressed & PAD_BUTTON_LEFT				||
-					 WPAD_Pressed & WPAD_CLASSIC_BUTTON_LEFT	|| 
-					 WPAD_Pressed & WPAD_BUTTON_RIGHT			||
-					 PAD_Pressed & PAD_BUTTON_RIGHT				||
-					 WPAD_Pressed & WPAD_CLASSIC_BUTTON_RIGHT	|| 
-					 WPAD_Pressed & WPAD_BUTTON_A				||
-					 WPAD_Pressed & WPAD_CLASSIC_BUTTON_A		|| 
-					 PAD_Pressed & PAD_BUTTON_A
-					)
+				if ( WPAD_Pressed & WPAD_BUTTON_LEFT || WPAD_Pressed & WPAD_BUTTON_RIGHT || WPAD_Pressed & WPAD_BUTTON_A )
 				{
 					if( settings->UseSystemMenuIOS )
 					{
@@ -1061,9 +1298,9 @@ void SetSettings( void )
 				}
 			}
 			break;
-			case 12:		//	System Menu IOS
+			case 13:		//	System Menu IOS
 			{
-				if ( WPAD_Pressed & WPAD_BUTTON_LEFT || WPAD_Pressed & WPAD_CLASSIC_BUTTON_LEFT || PAD_Pressed & PAD_BUTTON_LEFT )
+				if ( WPAD_Pressed & WPAD_BUTTON_LEFT )
 				{
 					while(1)
 					{
@@ -1080,7 +1317,7 @@ void SetSettings( void )
 #endif
 
 					redraw=true;
-				} else if( WPAD_Pressed & WPAD_BUTTON_RIGHT || WPAD_Pressed & WPAD_CLASSIC_BUTTON_RIGHT || PAD_Pressed & PAD_BUTTON_RIGHT ) 
+				} else if( WPAD_Pressed & WPAD_BUTTON_RIGHT ) 
 				{
 					while(1)
 					{
@@ -1099,14 +1336,14 @@ void SetSettings( void )
 				}
 
 			} break;
-			case 13:
+			case 14:
 			{
-				if ( WPAD_Pressed & WPAD_BUTTON_A || WPAD_Pressed & WPAD_CLASSIC_BUTTON_A || PAD_Pressed & PAD_BUTTON_A )
+				if ( WPAD_Pressed & WPAD_BUTTON_A )
 				{
 					if( SaveSettings() )
-						PrintFormat( 0, 114, 128+224+16, "settings saved");
+						PrintFormat( 0, 114, 128+224+16, "Settings saved");
 					else
-						PrintFormat( 0, 118, 128+224+16, "saving failed");
+						PrintFormat( 0, 118, 128+224+16, "Saving failed");
 				}
 			} break;
 
@@ -1115,22 +1352,22 @@ void SetSettings( void )
 				break;
 		}
 
-		if ( WPAD_Pressed & WPAD_BUTTON_DOWN || WPAD_Pressed & WPAD_CLASSIC_BUTTON_DOWN || PAD_Pressed & PAD_BUTTON_DOWN )
+		if ( WPAD_Pressed & WPAD_BUTTON_DOWN )
 		{
 			cur_off++;
-			if( (settings->UseSystemMenuIOS) && (cur_off == 12))
+			if( (settings->UseSystemMenuIOS) && (cur_off == 13))
 				cur_off++;
-			if( cur_off >= 14)
+			if( cur_off >= 15)
 				cur_off = 0;
 			
 			redraw=true;
-		} else if ( WPAD_Pressed & WPAD_BUTTON_UP || WPAD_Pressed & WPAD_CLASSIC_BUTTON_UP || PAD_Pressed & PAD_BUTTON_UP )
+		} else if ( WPAD_Pressed & WPAD_BUTTON_UP )
 		{
 			cur_off--;
-			if( (settings->UseSystemMenuIOS) && (cur_off == 12))
+			if( (settings->UseSystemMenuIOS) && (cur_off == 13))
 				cur_off--;
 			if( cur_off < 0 )
-				cur_off = 13;
+				cur_off = 14;
 			
 			redraw=true;
 		}
@@ -1189,16 +1426,18 @@ void SetSettings( void )
 			PrintFormat( cur_off==8, 0, 128+(16*7), "      Protect Autoboot:          %s", settings->PasscheckMenu?"on ":"off");
 			PrintFormat( cur_off==9, 0, 128+(16*8), "     Dump Gecko output:          %s", settings->DumpGeckoText?"on ":"off");
 			PrintFormat( cur_off==10,0, 128+(16*9), "     Show Beta Updates:          %s", settings->ShowBetaUpdates?"on ":"off");
-			PrintFormat( cur_off==11,0, 128+(16*10),"   Use System Menu IOS:          %s", settings->UseSystemMenuIOS?"on ":"off");
+			PrintFormat( cur_off==11,0, 128+(16*10)," Use Classic Hacks.ini:          %s", settings->UseClassicHacks?"on ":"off");
+			PrintFormat( cur_off==12,0, 128+(16*11),"   Use System Menu IOS:          %s", settings->UseSystemMenuIOS?"on ":"off");
 			if(!settings->UseSystemMenuIOS)
 			{
-				PrintFormat( cur_off==12, 0, 128+(16*11), "     IOS to use for SM:          %d  ", (u32)(TitleIDs[IOS_off]&0xFFFFFFFF) );
+				PrintFormat( cur_off==13, 0, 128+192, "     IOS to use for SM:          %d  ", (u32)(TitleIDs[IOS_off]&0xFFFFFFFF) );
 			}
 			else
 			{
-				PrintFormat( cur_off==12, 0, 128+(16*11),	"                                        ");
+				PrintFormat( cur_off==13, 0, 128+192,	"                                        ");
 			}
-			PrintFormat( cur_off==13, 118, 128+224, "save settings");
+			//PrintFormat( cur_off==13,0, 128+(16*12),"     Use Classic Hacks:          %s", settings->UseClassicHacks?"on ":"off");
+			PrintFormat( cur_off==14, 118, 128+224, "Save Settings");
 			PrintFormat( 0, 114, 128+224+16, "                 ");
 
 			redraw = false;
@@ -1257,7 +1496,7 @@ void LoadBootMii( void )
 	{
 		if(rmode != NULL)
 		{
-			PrintFormat( 1, ((rmode->viWidth /2)-((strlen("Bootmii(IOS254) Not found!"))*13/2))>>1, 208, "Bootmii(IOS254) Not found!");
+			PrintFormat( 1, TEXT_OFFSET("Bootmii(IOS254) Not found!"), 208, "Bootmii(IOS254) Not found!");
 			sleep(5);
 		}
 		return;
@@ -1266,7 +1505,7 @@ void LoadBootMii( void )
 	{
 		if(rmode != NULL)
 		{
-			PrintFormat( 1, ((rmode->viWidth /2)-((strlen("Could not mount SD card"))*13/2))>>1, 208, "Could not mount SD card");
+			PrintFormat( 1, TEXT_OFFSET("Could not mount SD card"), 208, "Could not mount SD card");
 			sleep(5);
 		}
 		return;
@@ -1276,7 +1515,7 @@ void LoadBootMii( void )
 	{
 		if(rmode != NULL)
 		{
-			PrintFormat( 1, ((rmode->viWidth /2)-((strlen("Could not find fat:/bootmii/armboot.bin"))*13/2))>>1, 208, "Could not find fat:/bootmii/armboot.bin");
+			PrintFormat( 1, TEXT_OFFSET("Could not find fat:/bootmii/armboot.bin"), 208, "Could not find fat:/bootmii/armboot.bin");
 			sleep(5);
 		}
 		return;
@@ -1502,7 +1741,7 @@ s8 BootDolFromFat( FILE* fat_fd , u8 HW_AHBPROT_ENABLED, struct __argv *args )
 	}
 	else
 	{
-		PrintFormat( 1, ((rmode->viWidth /2)-((strlen("failed to reload ios for homebrew! ios is a stub!"))*13/2))>>1, 208, "failed to reload ios for homebrew! ios is a stub!");
+		PrintFormat( 1, TEXT_OFFSET("failed to reload ios for homebrew! ios is a stub!"), 208, "failed to reload ios for homebrew! ios is a stub!");
 		sleep(2);	
 	}
 
@@ -1736,7 +1975,7 @@ s8 BootDolFromMem( u8 *dolstart , u8 HW_AHBPROT_ENABLED, struct __argv *args )
 	}
 	else
 	{
-		PrintFormat( 1, ((rmode->viWidth /2)-((strlen("failed to reload ios for homebrew! ios is a stub!"))*13/2))>>1, 208, "failed to reload ios for homebrew! ios is a stub!");
+		PrintFormat( 1, TEXT_OFFSET("failed to reload ios for homebrew! ios is a stub!"), 208, "failed to reload ios for homebrew! ios is a stub!");
 		sleep(2);	
 	}
 
@@ -2050,7 +2289,14 @@ void BootMainSysMenu( u8 init )
 	entrypoint = (void (*)())(boot_hdr->entrypoint);
 	gdprintf("entrypoint %08X\n", entrypoint );
 
-	LoadHacks_Hash(true);
+	if( !SGetSetting( SETTING_CLASSIC_HACKS ) )
+	{
+		LoadHacks_Hash(true);
+	}
+	else
+	{
+		LoadHacks(true);
+	}
 
 	for(u8 i=0;i<WPAD_MAX_WIIMOTES;i++) {
 		if(WPAD_Probe(i,0) < 0)
@@ -2203,44 +2449,67 @@ void BootMainSysMenu( u8 init )
 	*(vu32*)0x800000FC = 0x2B73A840;				// CPU Clock Speed
 	*(vu32*)0x8000315C = 0x80800113;				// DI Legacy mode ?
 	DCFlushRange((void*)0x80000000,0x3400);
-
-	gprintf("Hacks:%d\n",hacks_hash.size());
-	if(hacks_hash.size() != 0)
+if( SGetSetting( SETTING_CLASSIC_HACKS ) )
 	{
-		mem_block = (u8*)(*boot_hdr->addressData - *boot_hdr->offsetData);
-		max_address = (u32)(*boot_hdr->sizeData + *boot_hdr->addressData);
-		for(u32 i = 0;i < hacks_hash.size();i++)
+		gprintf("Hacks:%d\n", hacks.size() );
+		//Apply patches
+		for( u32 i=0; i<hacks.size(); ++i)
 		{
-			if(states_hash[i] == 1)
+			gdprintf("i:%d state:%d version:%d\n", i, states[i], hacks[i].version);
+			if( states[i] == 1 )
 			{
-				u32 add = 0;
-				for(u32 y = 0; y < hacks_hash[i].amount;y++)
+				if( hacks[i].version != rTMD->title_version )
+					continue;
+
+				for( u32 z=0; z < hacks[i].value.size(); ++z )
 				{
-					while( add + (u32)mem_block < max_address)
+					gdprintf("%08X:%08X\n", hacks[i].offset[z], hacks[i].value[z] );
+					*(vu32*)(hacks[i].offset[z]) = hacks[i].value[z];
+					DCFlushRange((void*)(hacks[i].offset[z]), 4);
+				}
+			}
+		}
+	}
+	else
+	{
+		gprintf("Hacks:%d\n",hacks_hash.size());
+		if(hacks_hash.size() != 0)
+		{
+			mem_block = (u8*)(*boot_hdr->addressData - *boot_hdr->offsetData);
+			max_address = (u32)(*boot_hdr->sizeData + *boot_hdr->addressData);
+			for(u32 i = 0;i < hacks_hash.size();i++)
+			{
+				if(states_hash[i] == 1)
+				{
+					u32 add = 0;
+					for(u32 y = 0; y < hacks_hash[i].amount;y++)
 					{
-						u8 temp_hash[hacks_hash[i].patches[y].hash.size()];
-						u8 temp_patch[hacks_hash[i].patches[y].patch.size()];
-						for(u32 z = 0;z < hacks_hash[i].patches[y].hash.size(); z++)
+						while( add + (u32)mem_block < max_address)
 						{
-							temp_hash[z] = hacks_hash[i].patches[y].hash[z];
-						}
-						if ( !memcmp(mem_block+add, temp_hash ,sizeof(temp_hash)) )
-						{
-							gprintf("Found %s @ 0x%X, patching hash # %d...\n",hacks_hash[i].desc.c_str(), add+(u32)mem_block, y+1);
-							for(u32 z = 0;z < hacks_hash[i].patches[y].patch.size(); z++)
+							u8 temp_hash[hacks_hash[i].patches[y].hash.size()];
+							u8 temp_patch[hacks_hash[i].patches[y].patch.size()];
+							for(u32 z = 0;z < hacks_hash[i].patches[y].hash.size(); z++)
 							{
-								temp_patch[z] = hacks_hash[i].patches[y].patch[z];
+								temp_hash[z] = hacks_hash[i].patches[y].hash[z];
 							}
-							memcpy(mem_block+add,temp_patch,sizeof(temp_patch) );
-							DCFlushRange((u8 *)((add+(u32)mem_block) >> 5 << 5), (sizeof(temp_patch) >> 5 << 5) + 64);
-							break;
-						}
-						add++;
-					}//end while loop
-				} //end for loop of all hashes of hack[i]
-			} //end if state[i] = 1
-		} // end general hacks loop
-	} //end if hacks > 0
+							if ( !memcmp(mem_block+add, temp_hash ,sizeof(temp_hash)) )
+							{
+								gprintf("Found %s @ 0x%X, patching hash # %d...\n",hacks_hash[i].desc.c_str(), add+(u32)mem_block, y+1);
+								for(u32 z = 0;z < hacks_hash[i].patches[y].patch.size(); z++)
+								{
+									temp_patch[z] = hacks_hash[i].patches[y].patch[z];
+								}
+								memcpy(mem_block+add,temp_patch,sizeof(temp_patch) );
+								DCFlushRange((u8 *)((add+(u32)mem_block) >> 5 << 5), (sizeof(temp_patch) >> 5 << 5) + 64);
+								break;
+							}
+							add++;
+						}//end while loop
+					} //end for loop of all hashes of hack[i]
+				} //end if state[i] = 1
+			} // end general hacks loop
+		} //end if hacks > 0
+	} // end if classic hack are enabled
 	if(TMD)
 		mem_free(TMD);
 	if(tstatus)
@@ -2294,7 +2563,7 @@ void InstallLoadDOL( void )
 		if (DevStat != GetMountedValue())
 		{
 			ClearScreen();
-			PrintFormat( 1, ((rmode->viWidth /2)-((strlen("Reloading Binaries..."))*13/2))>>1, 208, "Reloading Binaries...");
+			PrintFormat( 1, TEXT_OFFSET("Reloading Binaries..."), 208, "Reloading Binaries...");
 			sleep(1);
 			app_list.clear();
 			reload = 1;
@@ -2306,7 +2575,7 @@ void InstallLoadDOL( void )
 		if(GetMountedValue() == 0)
 		{
 			ClearScreen();
-			PrintFormat( 1, ((rmode->viWidth /2)-((strlen("NO fat device found!"))*13/2))>>1, 208, "NO fat device found!");
+			PrintFormat( 1, TEXT_OFFSET("No fat device found!"), 208, "NO fat device found!");
 			sleep(5);
 			return;
 		}
@@ -2434,7 +2703,7 @@ void InstallLoadDOL( void )
 					}
 					if(temp.app_name.size())
 					{
-						gdprintf("added %s to list\n",temp.app_name);
+						gdprintf("added %s to list\n",temp.app_name.c_str());
 						app_list.push_back(temp);
 						continue;
 					}
@@ -2491,8 +2760,8 @@ void InstallLoadDOL( void )
 					gprintf("fixing usbonly mode...\n");
 					ToggleUSBOnlyMode();
 				}
-				PrintFormat( 1, ((rmode->viWidth /2)-((strlen("Couldn't find any executable files"))*13/2))>>1, 208, "Couldn't find any executable files");
-				PrintFormat( 1, ((rmode->viWidth /2)-((strlen("in the fat:/apps/ on the device!"))*13/2))>>1, 228, "in the fat:/apps/ on the device!");
+				PrintFormat( 1, TEXT_OFFSET("Couldn't find any executable files"), 208, "Couldn't find any executable files");
+				PrintFormat( 1, TEXT_OFFSET("in the fat:/apps/ on the device!"), 228, "in the fat:/apps/ on the device!");
 				sleep(5);
 				return;
 			}
@@ -2537,34 +2806,27 @@ void InstallLoadDOL( void )
 			s16 i= min_pos;
 			if((s32)app_list.size() -1 > max_pos && (min_pos != (s32)app_list.size() - max_pos - 1) )
 			{
-				PrintFormat( 0,((rmode->viWidth /2)-((strlen("-----More-----"))*13/2))>>1,64+(max_pos+2)*16,"-----More-----");
+				PrintFormat( 0,TEXT_OFFSET("-----More-----"),64+(max_pos+2)*16,"-----More-----");
 			}
 			if(min_pos > 0 )
 			{
-				PrintFormat( 0,((rmode->viWidth /2)-((strlen("-----Less-----"))*13/2))>>1,64,"-----Less-----");
+				PrintFormat( 0, TEXT_OFFSET("-----Less-----"),64,"-----Less-----");
 			}
 			for(; i<=(min_pos + max_pos); i++ )
 			{
 				PrintFormat( cur_off==i, 16, 64+(i-min_pos+1)*16, "%s%s", app_list[i].app_name.c_str(),(read32(0x0d800064) == 0xFFFFFFFF && app_list[i].HW_AHBPROT_ENABLED != 0)?"(AHBPROT Available)":" ");
 			}
-			PrintFormat( 0, ((rmode->viWidth /2)-((strlen("A(A) Install File"))*13/2))>>1, rmode->viHeight-64, "A(A) Install FIle");
-			PrintFormat( 0, ((rmode->viWidth /2)-((strlen("1(Z) Load File   "))*13/2))>>1, rmode->viHeight-48, "1(Y) Load File");
-			PrintFormat( 0, ((rmode->viWidth /2)-((strlen("2(X) Delete installed File"))*13/2))>>1, rmode->viHeight-32, "2(X) Delete installed File");
+			PrintFormat( 0, TEXT_OFFSET("A(A) Install File"), rmode->viHeight-64, "A(A) Install FIle");
+			PrintFormat( 0, TEXT_OFFSET("1(Z) Load File   "), rmode->viHeight-48, "1(Y) Load File");
+			PrintFormat( 0, TEXT_OFFSET("2(X) Delete installed File"), rmode->viHeight-32, "2(X) Delete installed File");
 
 			redraw = false;
 		}
-		WPAD_ScanPads();
-		PAD_ScanPads();
+		u32 WPAD_Pressed = DetectInput(); 
+		
+		if ( WPAD_Pressed & WPAD_BUTTON_B ) break;
 
-		u32 WPAD_Pressed = WPAD_ButtonsDown(0) | WPAD_ButtonsDown(1) | WPAD_ButtonsDown(2) | WPAD_ButtonsDown(3);
-		u32 PAD_Pressed  = PAD_ButtonsDown(0) | PAD_ButtonsDown(1) | PAD_ButtonsDown(2) | PAD_ButtonsDown(3);
- 
-		if ( WPAD_Pressed & WPAD_BUTTON_B || WPAD_Pressed & WPAD_CLASSIC_BUTTON_B || PAD_Pressed & PAD_BUTTON_B )
-		{
-			break;
-		}
-
-		if ( WPAD_Pressed & WPAD_BUTTON_A || WPAD_Pressed & WPAD_CLASSIC_BUTTON_A || PAD_Pressed & PAD_BUTTON_A )
+		if ( WPAD_Pressed & WPAD_BUTTON_A )
 		{
 			ClearScreen();
 			FILE *dol = fopen(app_list[cur_off].app_path.c_str(),"rb");
@@ -2604,7 +2866,7 @@ void InstallLoadDOL( void )
 
 				if( ISFS_Write( fd, buf, sizeof( char ) * size ) != (signed)(sizeof( char ) * size) )
 				{
-					PrintFormat( 1, ((rmode->viWidth /2)-((strlen("Writing dol failed!"))*13/2))>>1, 240, "Writing dol failed!");
+					PrintFormat( 1, TEXT_OFFSET("Writing dol failed!"), 240, "Writing dol failed!");
 				}
 				else
 				{
@@ -2650,7 +2912,7 @@ void InstallLoadDOL( void )
 					}
 					if( fd < 0 )
 					{
-						PrintFormat( 1, ((rmode->viWidth /2)-((strlen("Writing nfo failed!"))*13/2))>>1, 272, "Writing nfo failed!");
+						PrintFormat( 1, TEXT_OFFSET("Writing nfo failed!"), 272, "Writing nfo failed!");
 					}
 					else
 					{
@@ -2671,7 +2933,7 @@ void InstallLoadDOL( void )
 			}
 			else
 			{
-				PrintFormat( 1, ((rmode->viWidth /2)-((strlen("Writing file failed!"))*13/2))>>1, 240, "Writing file failed!");
+				PrintFormat( 1, TEXT_OFFSET("Writing file failed!"), 240, "Writing file failed!");
 			}
 			sleep(5);
 			ClearScreen();
@@ -2679,12 +2941,12 @@ void InstallLoadDOL( void )
 
 		}
 
-		if ( WPAD_Pressed & WPAD_BUTTON_2 || WPAD_Pressed & WPAD_CLASSIC_BUTTON_X || PAD_Pressed & PAD_BUTTON_X )
+		if ( WPAD_Pressed & WPAD_BUTTON_2 )
 		{
 			ClearScreen();
 			//Delete file
 
-			PrintFormat( 0, ((rmode->viWidth /2)-((strlen("Deleting installed File..."))*13/2))>>1, 208, "Deleting installed File...");
+			PrintFormat( 0, TEXT_OFFSET("Deleting installed File..."), 208, "Deleting installed File...");
 
 			ISFS_Delete("/title/00000001/00000002/data/main.nfo");
 
@@ -2699,12 +2961,12 @@ void InstallLoadDOL( void )
 				fd = ISFS_Open("/title/00000001/00000002/data/main.bin", 1|2 );
 
 				if( fd >= 0 )	//file not delete
-					PrintFormat( 0, ((rmode->viWidth /2)-((strlen("Failed"))*13/2))>>1, 240, "Failed");
+					PrintFormat( 0, TEXT_OFFSET("Failed"), 240, "Failed");
 				else
-					PrintFormat( 0, ((rmode->viWidth /2)-((strlen("Success"))*13/2))>>1, 240, "Success");
+					PrintFormat( 0, TEXT_OFFSET("Success"), 240, "Success");
 			}
 			else
-				PrintFormat( 0, ((rmode->viWidth /2)-((strlen("No File installed..."))*13/2))>>1, 240, "No File installed...");
+				PrintFormat( 0, TEXT_OFFSET("No File installed..."), 240, "No File installed...");
 
 			sleep(5);
 			ClearScreen();
@@ -2713,18 +2975,18 @@ void InstallLoadDOL( void )
 
 		}
 
-		if ( WPAD_Pressed & WPAD_BUTTON_1 || WPAD_Pressed & WPAD_CLASSIC_BUTTON_Y || PAD_Pressed & PAD_BUTTON_Y )
+		if ( WPAD_Pressed & WPAD_BUTTON_1 )
 		{
 			ClearScreen();
-			PrintFormat( 1, ((rmode->viWidth /2)-((strlen("Loading binary..."))*13/2))>>1, 208, "Loading binary...");	
+			PrintFormat( 1, TEXT_OFFSET("Loading binary..."), 208, "Loading binary...");	
 			ret = BootDolFromDir(app_list[cur_off].app_path.c_str(),app_list[cur_off].HW_AHBPROT_ENABLED,app_list[cur_off].args);
 			gprintf("loading %s ret %d\n",app_list[cur_off].app_path.c_str(),ret);
-			PrintFormat( 1, ((rmode->viWidth /2)-((strlen("failed to load binary"))*13/2))>>1, 224, "failed to load binary");
+			PrintFormat( 1, TEXT_OFFSET("failed to load binary"), 224, "failed to load binary");
 			sleep(3);
 			ClearScreen();
 			redraw=true;
 		}
-		if ( WPAD_Pressed & WPAD_BUTTON_UP || WPAD_Pressed & WPAD_CLASSIC_BUTTON_UP || PAD_Pressed & PAD_BUTTON_UP )
+		if ( WPAD_Pressed & WPAD_BUTTON_UP )
 		{
 			cur_off--;
 			if (cur_off < min_pos)
@@ -2735,8 +2997,8 @@ void InstallLoadDOL( void )
 					for(s8 i = min_pos; i<=(min_pos + max_pos); i++ )
 					{
 						PrintFormat( 0, 16, 64+(i-min_pos+1)*16, "                                        ");
-						PrintFormat( 0,((rmode->viWidth /2)-((strlen("               "))*13/2))>>1,64+(max_pos+2)*16,"               ");
-						PrintFormat( 0,((rmode->viWidth /2)-((strlen("               "))*13/2))>>1,64,"               ");
+						PrintFormat( 0,TEXT_OFFSET("               "),64+(max_pos+2)*16,"               ");
+						PrintFormat( 0,TEXT_OFFSET("               "),64,"               ");
 					}
 				}
 			}
@@ -2747,7 +3009,7 @@ void InstallLoadDOL( void )
 			}
 			redraw = true;
 		}
-		if ( WPAD_Pressed & WPAD_BUTTON_DOWN || WPAD_Pressed & WPAD_CLASSIC_BUTTON_DOWN || PAD_Pressed & PAD_BUTTON_DOWN )
+		if ( WPAD_Pressed & WPAD_BUTTON_DOWN )
 		{
 			cur_off++;
 			if (cur_off > (max_pos + min_pos))
@@ -2758,8 +3020,8 @@ void InstallLoadDOL( void )
 					for(s8 i = min_pos; i<=(min_pos + max_pos); i++ )
 					{
 						PrintFormat( 0, 16, 64+(i-min_pos+1)*16, "                                        ");
-						PrintFormat( 0,((rmode->viWidth /2)-((strlen("               "))*13/2))>>1,64+(max_pos+2)*16,"               ");
-						PrintFormat( 0,((rmode->viWidth /2)-((strlen("               "))*13/2))>>1,64,"               ");
+						PrintFormat( 0,TEXT_OFFSET("               "),64+(max_pos+2)*16,"               ");
+						PrintFormat( 0,TEXT_OFFSET("               "),64,"               ");
 					}
 				}
 			}
@@ -3180,7 +3442,7 @@ read_dol:
 	}
 	else
 	{
-		PrintFormat( 1, ((rmode->viWidth /2)-((strlen("failed to reload ios for homebrew! ios is a stub!"))*13/2))>>1, 208, "failed to reload ios for homebrew! ios is a stub!");
+		PrintFormat( 1, TEXT_OFFSET("failed to reload ios for homebrew! ios is a stub!"), 208, "failed to reload ios for homebrew! ios is a stub!");
 		sleep(2);	
 	}
 
@@ -3216,10 +3478,10 @@ return_dol:
 void CheckForUpdate()
 {
 	ClearScreen();
-	PrintFormat( 1, ((rmode->viWidth /2)-((strlen("Initialising Wifi..."))*13/2))>>1, 208, "Initialising Wifi...");
+	PrintFormat( 1, TEXT_OFFSET("Initialising Wifi..."), 208, "Initialising Wifi...");
 	if (InitNetwork() < 0 )
 	{
-		PrintFormat( 1, ((rmode->viWidth /2)-((strlen("failed to initialise wifi"))*13/2))>>1, 224, "failed to initialise wifi");
+		PrintFormat( 1, TEXT_OFFSET("failed to initialise wifi"), 224, "failed to initialise wifi");
 		sleep(5);
 		return;
 	}
@@ -3231,7 +3493,7 @@ void CheckForUpdate()
 	file_size = GetHTTPFile("www.dacotaco.com","/priiloader/version.dat",buffer,0);
 	if ( file_size <= 0 || file_size != (s32)sizeof(UpdateStruct) || buffer == NULL)
 	{
-		PrintFormat( 1, ((rmode->viWidth /2)-((strlen("error getting versions from server"))*13/2))>>1, 224, "error getting versions from server");
+		PrintFormat( 1, TEXT_OFFSET("error getting versions from server"), 224, "error getting versions from server");
 		if (file_size < -9)
 		{
 			//free pointer
@@ -3319,22 +3581,16 @@ void CheckForUpdate()
 				sleep(2);
 				return;
 			}
-			PrintFormat( 0, ((rmode->viWidth /2)-((strlen("A(A) Download Update       "))*13/2))>>1, rmode->viHeight-48, "A(A) Download Update       ");
-			PrintFormat( 0, ((rmode->viWidth /2)-((strlen("B(B) Cancel Update         "))*13/2))>>1, rmode->viHeight-32, "B(B) Cancel Update         ");
+			PrintFormat( 0, TEXT_OFFSET("A(A) Download Update       "), rmode->viHeight-48, "A(A) Download Update       ");
+			PrintFormat( 0, TEXT_OFFSET("B(B) Cancel Update         "), rmode->viHeight-32, "B(B) Cancel Update         ");
 			redraw = 0;
 		}
 
-		WPAD_ScanPads();
-		PAD_ScanPads();
+		u32 WPAD_Pressed = DetectInput();
 
-		u32 WPAD_Pressed = WPAD_ButtonsDown(0) | WPAD_ButtonsDown(1) | WPAD_ButtonsDown(2) | WPAD_ButtonsDown(3);
-		u32 PAD_Pressed  = PAD_ButtonsDown(0) | PAD_ButtonsDown(1) | PAD_ButtonsDown(2) | PAD_ButtonsDown(3);
-
-		if ( WPAD_Pressed & WPAD_BUTTON_B || WPAD_Pressed & WPAD_CLASSIC_BUTTON_B || PAD_Pressed & PAD_BUTTON_B )
-		{
-			return;
-		}
-		if ( WPAD_Pressed & WPAD_BUTTON_A || WPAD_Pressed & WPAD_CLASSIC_BUTTON_A || PAD_Pressed & PAD_BUTTON_A )
+		if ( WPAD_Pressed & WPAD_BUTTON_B )	return;
+		
+		if ( WPAD_Pressed & WPAD_BUTTON_A )
 		{
 			if(cur_off == 0 && VersionUpdates == 1)
 			{
@@ -3348,7 +3604,7 @@ void CheckForUpdate()
 			}
 			redraw = 1;
 		}
-		if ( WPAD_Pressed & WPAD_BUTTON_UP || WPAD_Pressed & WPAD_CLASSIC_BUTTON_UP || PAD_Pressed & PAD_BUTTON_UP )
+		if ( WPAD_Pressed & WPAD_BUTTON_UP )
 		{
 			cur_off--;
 			if(cur_off < 0)
@@ -3365,7 +3621,7 @@ void CheckForUpdate()
 			}
 			redraw = 1;
 		}
-		if ( WPAD_Pressed & WPAD_BUTTON_DOWN || WPAD_Pressed & WPAD_CLASSIC_BUTTON_DOWN || PAD_Pressed & PAD_BUTTON_DOWN )
+		if ( WPAD_Pressed & WPAD_BUTTON_DOWN )
 		{
 			cur_off++;
 			if (SGetSetting(SETTING_SHOWBETAUPDATES))
@@ -3395,7 +3651,7 @@ void CheckForUpdate()
 	}
 	if (file_size > 0)
 	{
-		Changelog[file_size-1] == 0; // playing it safe for future shit
+		Changelog[file_size-1] = 0; // playing it safe for future shit
 		ClearScreen();
 		char se[5];
 		u8 line = 0;
@@ -3422,36 +3678,32 @@ void CheckForUpdate()
 		if( max_line >= lines.size() )
 			max_line = lines.size()-1;
 
-		PrintFormat( 1, ((rmode->viWidth /2)-((strlen(" Changelog "))*13/2))>>1, 64+(16*1), " Changelog ");
-		PrintFormat( 1, ((rmode->viWidth /2)-((strlen("-----------"))*13/2))>>1, 64+(16*2), "-----------");
+		PrintFormat( 1, TEXT_OFFSET(" Changelog "), 64+(16*1), " Changelog ");
+		PrintFormat( 1, TEXT_OFFSET("-----------"), 64+(16*2), "-----------");
 		if((lines.size() -1) > max_line)
 		{
-			PrintFormat( 0, ((rmode->viWidth /2)-((strlen("Up    Scroll Up        "))*13/2))>>1, rmode->viHeight-80, "Up    Scroll Up");
-			PrintFormat( 0, ((rmode->viWidth /2)-((strlen("Down  Scroll Down      "))*13/2))>>1, rmode->viHeight-64, "Down  Scroll Down");
+			PrintFormat( 0, TEXT_OFFSET("Up    Scroll Up        "), rmode->viHeight-80, "Up    Scroll Up");
+			PrintFormat( 0, TEXT_OFFSET("Down  Scroll Down      "), rmode->viHeight-64, "Down  Scroll Down");
 		}
-		PrintFormat( 0, ((rmode->viWidth /2)-((strlen("A(A)  Proceed(Download)"))*13/2))>>1, rmode->viHeight-48, "A(A)  Proceed(Download)");
-		PrintFormat( 0, ((rmode->viWidth /2)-((strlen("B(B)  Cancel Update    "))*13/2))>>1, rmode->viHeight-32, "B(B)  Cancel Update    ");
-		u32 PAD_Pressed = 0;
-		u32 WPAD_Pressed = 0;
+		PrintFormat( 0, TEXT_OFFSET("A(A)  Proceed(Download)"), rmode->viHeight-48, "A(A)  Proceed(Download)");
+		PrintFormat( 0, TEXT_OFFSET("B(B)  Cancel Update    "), rmode->viHeight-32, "B(B)  Cancel Update    ");
+
 		while(1)
 		{
-			WPAD_ScanPads();
-			PAD_ScanPads();
+			u32 WPAD_Pressed = DetectInput();
 
-			WPAD_Pressed = WPAD_ButtonsDown(0) | WPAD_ButtonsDown(1) | WPAD_ButtonsDown(2) | WPAD_ButtonsDown(3);
-			PAD_Pressed  = PAD_ButtonsDown(0) | PAD_ButtonsDown(1) | PAD_ButtonsDown(2) | PAD_ButtonsDown(3);
-			if ( WPAD_Pressed & WPAD_BUTTON_A || WPAD_Pressed & WPAD_CLASSIC_BUTTON_A || PAD_Pressed & PAD_BUTTON_A )
+			if ( WPAD_Pressed & WPAD_BUTTON_A )
 			{
 				mem_free(Changelog);
 				break;
 			}
-			if ( WPAD_Pressed & WPAD_BUTTON_B || WPAD_Pressed & WPAD_CLASSIC_BUTTON_B || PAD_Pressed & PAD_BUTTON_B )
+			if ( WPAD_Pressed & WPAD_BUTTON_B )
 			{
 				mem_free(Changelog);
 				ClearScreen();
 				return;
 			}
-			if ( WPAD_Pressed & WPAD_BUTTON_DOWN || WPAD_Pressed & WPAD_CLASSIC_BUTTON_DOWN || PAD_Pressed & PAD_BUTTON_DOWN )
+			if ( WPAD_Pressed & WPAD_BUTTON_DOWN )
 			{
 				if ( (min_line+max_line) < lines.size()-1 )
 				{
@@ -3459,7 +3711,7 @@ void CheckForUpdate()
 					redraw = true;
 				}
 			}
-			if ( WPAD_Pressed & WPAD_BUTTON_UP || WPAD_Pressed & WPAD_CLASSIC_BUTTON_UP || PAD_Pressed & PAD_BUTTON_UP )
+			if ( WPAD_Pressed & WPAD_BUTTON_UP )
 			{
 				if ( min_line > 0 )
 				{
@@ -3497,13 +3749,13 @@ void CheckForUpdate()
 	gprintf("downloading %s\n",DownloadedBeta?"beta":"update");
 	if(DownloadedBeta)
 	{
-		PrintFormat( 1, ((640/2)-((strlen("downloading   .   beta   ..."))*13/2))>>1, 208, "downloading %d.%d beta %d...",UpdateFile.beta_version >> 8,UpdateFile.beta_version&0xFF, UpdateFile.beta_number);
+		PrintFormat( 1, TEXT_OFFSET("downloading   .   beta   ..."), 208, "downloading %d.%d beta %d...",UpdateFile.beta_version >> 8,UpdateFile.beta_version&0xFF, UpdateFile.beta_number);
 		file_size = GetHTTPFile("www.dacotaco.com","/priiloader/Priiloader_Beta.dol",Data,0);
 		//download beta
 	}
 	else
 	{
-		PrintFormat( 1, ((640/2)-((strlen("downloading   .  ..."))*13/2))>>1, 208, "downloading %d.%d ...",UpdateFile.version >> 8,UpdateFile.version&0xFF);
+		PrintFormat( 1, TEXT_OFFSET("downloading   .  ..."), 208, "downloading %d.%d ...",UpdateFile.version >> 8,UpdateFile.version&0xFF);
 		file_size = GetHTTPFile("www.dacotaco.com","/priiloader/Priiloader_Update.dol",Data,0);
 		//download Update
 	}
@@ -3524,7 +3776,7 @@ void CheckForUpdate()
 				mem_free(Data);
 			gprintf("getting update error %d\n",file_size);
 		}
-		PrintFormat( 1, ((rmode->viWidth /2)-((strlen("error getting file from server"))*13/2))>>1, 224, "error getting file from server");
+		PrintFormat( 1, TEXT_OFFSET("error getting file from server"), 224, "error getting file from server");
 		sleep(2);
 		return;
 	}
@@ -3587,7 +3839,7 @@ void CheckForUpdate()
 		else
 		{
 			gprintf("File not the same : hash check failure!\n");
-			PrintFormat( 1, ((640/2)-((strlen("Error Downloading Update"))*13/2))>>1, 224, "Error Downloading Update");
+			PrintFormat( 1, TEXT_OFFSET("Error Downloading Update"), 224, "Error Downloading Update");
 			sleep(5);
 			mem_free(Data);
 			return;
@@ -3598,18 +3850,18 @@ void CheckForUpdate()
 		ClearScreen();
 		if(DownloadedBeta)
 		{
-			PrintFormat( 1, ((640/2)-((strlen("loading   .   beta   ..."))*13/2))>>1, 208, "loading %d.%d beta %d...",UpdateFile.beta_version >> 8,UpdateFile.beta_version&0xFF, UpdateFile.beta_number);
+			PrintFormat( 1, TEXT_OFFSET("loading   .   beta   ..."), 208, "loading %d.%d beta %d...",UpdateFile.beta_version >> 8,UpdateFile.beta_version&0xFF, UpdateFile.beta_number);
 		}
 		else
 		{
-			PrintFormat( 1, ((640/2)-((strlen("loading   .  ..."))*13/2))>>1, 208, "loading %d.%d ...",UpdateFile.version >> 8,UpdateFile.version&0xFF);
+			PrintFormat( 1, TEXT_OFFSET("loading   .  ..."), 208, "loading %d.%d ...",UpdateFile.version >> 8,UpdateFile.version&0xFF);
 		}
 		sleep(1);
 		//load the fresh installer
 		net_deinit();
 		BootDolFromMem(Data,1,NULL);
 		mem_free(Data);
-		PrintFormat( 1, ((640/2)-((strlen("Error Booting Update dol"))*13/2))>>1, 224, "Error Booting Update dol");
+		PrintFormat( 1, TEXT_OFFSET("Error Booting Update dol"), 224, "Error Booting Update dol");
 		sleep(5);
 	}
 	return;
@@ -3698,7 +3950,7 @@ int main2(int argc, char **argv)
 #endif
 	gprintf("priiloader\n");
 	gprintf("Built   : %s %s\n", __DATE__, __TIME__ );
-	gprintf("Version : %d.%d (rev %d)\n", VERSION>>16, VERSION&0xFFFF, SVN_REV);
+	gprintf("Version : %d.%d (rev %s)\n", VERSION>>16, VERSION&0xFFFF, SVN_REV_STR);
 	gprintf("Firmware: %d.%d.%d\n", *(vu16*)0x80003140, *(vu8*)0x80003142, *(vu8*)0x80003143 );
 
 	s32 r = ISFS_Initialize();
@@ -3745,13 +3997,9 @@ int main2(int argc, char **argv)
 #endif
 	while(1)
 	{
-		WPAD_ScanPads();
-		PAD_ScanPads();
-
-		u32 WPAD_Pressed = WPAD_ButtonsDown(0) | WPAD_ButtonsDown(1) | WPAD_ButtonsDown(2) | WPAD_ButtonsDown(3);
-		u32 PAD_Pressed  = PAD_ButtonsDown(0) | PAD_ButtonsDown(1) | PAD_ButtonsDown(2) | PAD_ButtonsDown(3);
+		u32 WPAD_Pressed = DetectInput();
  
-		if ( WPAD_Pressed & WPAD_BUTTON_A || WPAD_Pressed & WPAD_CLASSIC_BUTTON_A || PAD_Pressed & PAD_BUTTON_A )
+		if ( WPAD_Pressed & WPAD_BUTTON_A )
 		{
 			ClearScreen();
 			system_state.InMainMenu = 0;
@@ -3801,7 +4049,7 @@ int main2(int argc, char **argv)
 			redraw=true;
 		}
 
-		if ( WPAD_Pressed & WPAD_BUTTON_DOWN || WPAD_Pressed & WPAD_CLASSIC_BUTTON_DOWN || PAD_Pressed & PAD_BUTTON_DOWN )
+		if ( WPAD_Pressed & WPAD_BUTTON_DOWN )
 		{
 			cur_off++;
 
@@ -3816,7 +4064,7 @@ int main2(int argc, char **argv)
 			}
 			//gprintf("loool %d-%d-%d\n",*(vu32*)0xCC003000,(*(vu32*)0xCC003000)>>16,((*(vu32*)0xCC003000)>>16)&1);
 			redraw=true;
-		} else if ( WPAD_Pressed & WPAD_BUTTON_UP || WPAD_Pressed & WPAD_CLASSIC_BUTTON_UP || PAD_Pressed & PAD_BUTTON_UP )
+		} else if ( WPAD_Pressed & WPAD_BUTTON_UP )
 		{
 			cur_off--;
 
@@ -3857,7 +4105,7 @@ int main(int argc, char **argv)
 #endif
 	gprintf("priiloader\n");
 	gprintf("Built   : %s %s\n", __DATE__, __TIME__ );
-	gprintf("Version : %d.%d (rev %d)\n", VERSION>>16, VERSION&0xFFFF, SVN_REV);
+	gprintf("Version : %d.%d (rev %s)\n", VERSION>>16, VERSION&0xFFFF, SVN_REV_STR);
 	gprintf("Firmware: %d.%d.%d\n", *(vu16*)0x80003140, *(vu8*)0x80003142, *(vu8*)0x80003143 );
 
 	/**(vu32*)0x80000020 = 0x0D15EA5E;				// Magic word (how did the console boot?)
@@ -4070,13 +4318,9 @@ int main(int argc, char **argv)
 	//gprintf("ptr : 0x%08X data of ptr : 0x%08X size : %d\n",&system_state,*((u32*)&system_state),sizeof(system_state));
 	while(1)
 	{
-		WPAD_ScanPads();
-		PAD_ScanPads();
-
-		u32 WPAD_Pressed = WPAD_ButtonsDown(0) | WPAD_ButtonsDown(1) | WPAD_ButtonsDown(2) | WPAD_ButtonsDown(3);
-		u32 PAD_Pressed  = PAD_ButtonsDown(0) | PAD_ButtonsDown(1) | PAD_ButtonsDown(2) | PAD_ButtonsDown(3);
+		u32 WPAD_Pressed = DetectInput();
  
-		if ( WPAD_Pressed & WPAD_BUTTON_A || WPAD_Pressed & WPAD_CLASSIC_BUTTON_A || PAD_Pressed & PAD_BUTTON_A )
+		if ( WPAD_Pressed & WPAD_BUTTON_A )
 		{
 			ClearScreen();
 			system_state.InMainMenu = 0;
@@ -4105,7 +4349,10 @@ int main(int argc, char **argv)
 					InstallLoadDOL();
 					break;
 				case 6:
-					SysHackHashSettings();
+					if( SGetSetting( SETTING_CLASSIC_HACKS ) )
+						SysHackSettings();
+					else
+						SysHackHashSettings();
 					break;
 				case 7:
 					CheckForUpdate();
@@ -4126,7 +4373,7 @@ int main(int argc, char **argv)
 			redraw=true;
 		}
 
-		if ( WPAD_Pressed & WPAD_BUTTON_DOWN || WPAD_Pressed & WPAD_CLASSIC_BUTTON_DOWN || PAD_Pressed & PAD_BUTTON_DOWN )
+		if ( WPAD_Pressed & WPAD_BUTTON_DOWN )
 		{
 			cur_off++;
 
@@ -4141,7 +4388,7 @@ int main(int argc, char **argv)
 			}
 			//gprintf("loool %d-%d-%d\n",*(vu32*)0xCC003000,(*(vu32*)0xCC003000)>>16,((*(vu32*)0xCC003000)>>16)&1);
 			redraw=true;
-		} else if ( WPAD_Pressed & WPAD_BUTTON_UP || WPAD_Pressed & WPAD_CLASSIC_BUTTON_UP || PAD_Pressed & PAD_BUTTON_UP )
+		} else if ( WPAD_Pressed & WPAD_BUTTON_UP )
 		{
 			cur_off--;
 
@@ -4161,24 +4408,25 @@ int main(int argc, char **argv)
 		if( redraw )
 		{
 			#if BETAVERSION > 0
-				PrintFormat( 0, 160, rmode->viHeight-68, "priiloader v%d.%d(beta v%d)", VERSION>>8, VERSION&0xFF, BETAVERSION&0xFF );
+				PrintFormat( 0, 160, rmode->viHeight-84, "Priiloader v%d.%d(beta v%d)", VERSION>>8, VERSION&0xFF, BETAVERSION&0xFF );
 			#else
-				PrintFormat( 0, 160, rmode->viHeight-68, "priiloader v%d.%d (r%d)", VERSION>>8, VERSION&0xFF,SVN_REV );
+				PrintFormat( 0, 160, rmode->viHeight-84, "Priiloader v%d.%d (r%d)", VERSION>>8, VERSION&0xFF,SVN_REV );
 			#endif
+			PrintFormat( 0, 160, rmode->viHeight-68, "HacksDen Edition");
 			PrintFormat( 0, 16, rmode->viHeight-84, "IOS v%d", (*(vu32*)0x80003140)>>16 );
-			PrintFormat( 0, 16, rmode->viHeight-68, "Systemmenu v%d", SysVersion );			
+			PrintFormat( 0, 16, rmode->viHeight-68, "System Menu v%d", SysVersion );			
 			PrintFormat( 0, 16, rmode->viHeight-40, "Priiloader is a mod of Preloader 0.30");
 
-			PrintFormat( cur_off==0, ((rmode->viWidth /2)-((strlen("System Menu"))*13/2))>>1, 64, "System Menu");
-			PrintFormat( cur_off==1, ((rmode->viWidth /2)-((strlen("Homebrew Channel"))*13/2))>>1, 80, "Homebrew Channel");
-			PrintFormat( cur_off==2, ((rmode->viWidth /2)-((strlen("BootMii IOS"))*13/2))>>1, 96, "BootMii IOS");
-			PrintFormat( cur_off==3, ((rmode->viWidth /2)-((strlen("Launch Title"))*13/2))>>1, 112, "Launch Title");
-			PrintFormat( cur_off==4, ((rmode->viWidth /2)-((strlen("Installed File"))*13/2))>>1, 144, "Installed File");
-			PrintFormat( cur_off==5, ((rmode->viWidth /2)-((strlen("Load/Install File"))*13/2))>>1, 160, "Load/Install File");
-			PrintFormat( cur_off==6, ((rmode->viWidth /2)-((strlen("System Menu Hacks"))*13/2))>>1, 176, "System Menu Hacks");
-			PrintFormat( cur_off==7, ((rmode->viWidth /2)-((strlen("Check For Update"))*13/2))>>1,192,"Check For Update");
-			PrintFormat( cur_off==8, ((rmode->viWidth /2)-((strlen("Set Password"))*13/2))>>1, 208, "Set Password");
-			PrintFormat( cur_off==9, ((rmode->viWidth /2)-((strlen("Settings"))*13/2))>>1, 224, "Settings");
+			PrintFormat( cur_off==0, TEXT_OFFSET("System Menu"), 64, "System Menu");
+			PrintFormat( cur_off==1, TEXT_OFFSET("Homebrew Channel"), 80, "Homebrew Channel");
+			PrintFormat( cur_off==2, TEXT_OFFSET("BootMii IOS"), 96, "BootMii IOS");
+			PrintFormat( cur_off==3, TEXT_OFFSET("Launch Title"), 112, "Launch Title");
+			PrintFormat( cur_off==4, TEXT_OFFSET("Installed File"), 144, "Installed File");
+			PrintFormat( cur_off==5, TEXT_OFFSET("Load/Install File"), 160, "Load/Install File");
+			PrintFormat( cur_off==6, TEXT_OFFSET("System Menu Hacks"), 176, "System Menu Hacks");
+			PrintFormat( cur_off==7, TEXT_OFFSET("Check For Update"),192,"Check For Update");
+			PrintFormat( cur_off==8, TEXT_OFFSET("Set Password"), 208, "Set Password");
+			PrintFormat( cur_off==9, TEXT_OFFSET("Settings"), 224, "Settings");
 
 			if (error > 0)
 			{

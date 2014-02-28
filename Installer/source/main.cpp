@@ -1448,7 +1448,7 @@ int main(int argc, char **argv)
 	//IOS_ReloadIOS(36);
 	
 	printf("\nIOS %d rev %d\n\n",IOS_GetVersion(),IOS_GetRevision());
-	printf("\tPriiloader rev %s (preloader v0.30 mod) Installation / Removal Tool\n\n\n\n\t",SVN_REV_STR);
+	printf("\tPriiloader HDE rev %s (preloader v0.30 mod) Installation / Removal Tool\n\n\n\n\t",SVN_REV_STR);
 	printf("\t\t\t\t\tPLEASE READ THIS CAREFULLY\n\n\t");
 	printf("\t\tTHIS PROGRAM/TOOL COMES WITHOUT ANY WARRANTIES!\n\t");
 	printf("\t\tYOU ACCEPT THAT YOU INSTALL THIS AT YOUR OWN RISK\n\n\n\t");
@@ -1546,12 +1546,12 @@ int main(int argc, char **argv)
 		exit(0);
 	}
 	
-	printf("\r\t\t\t   Press (+/R) to install or update Priiloader\n\t");
-	printf("\tPress (-/L) to remove Priiloader and restore system menu\n\t");
+	printf("\r\t\t\t   Press (+/R) to install or update Priiloader HDE\n\t");
+	printf("\tPress (-/L) to remove Priiloader HDE and restore system menu\n\t");
 	if( (ios_patched < 1) && (IOS_GetVersion() != 36 ) )
 		printf("  Hold Down (B) with any above options to use IOS36\n\t");
 	printf("\tPress (HOME/Start) to chicken out and quit the installer!\n\n\t");
-	printf("\t\t\t\t\tEnjoy! DacoTaco & BadUncle\n");
+	printf("\t\t\t\t\tEnjoy! DacoTaco, JoostinOnline, & BadUncle\n");
 	while(1)
 	{
 		u32 pDown = DetectInput(DI_BUTTONS_DOWN);

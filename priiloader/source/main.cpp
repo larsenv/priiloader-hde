@@ -64,6 +64,10 @@ Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
 #include "certs_bin.h"
 #include "stub_bin.h"
 
+// Values for DetectInput
+#define DI_BUTTONS_HELD		0
+#define DI_BUTTONS_DOWN		1
+
 extern "C"
 {
 	extern void _unstub_start(void);
@@ -129,13 +133,19 @@ certain circumstances, such as if a controller is present.
 
 Thanks to megazig for reminding me to support multiple key presses.
 */
-u32 DetectInput(void) {
+u32 DetectInput(u8 DownOrHeld) {
 	u32 pressed = 0;
+	u16 gcpressed = 0;
+	VIDEO_WaitVSync();
 	// Wii Remote (and Classic Controller) take precedence over GC to save time
 	if (WPAD_ScanPads() > WPAD_ERR_NONE) // Scan the Wii remotes.  If there any problems, skip checking buttons
 	{
-		pressed = WPAD_ButtonsDown(0) | WPAD_ButtonsDown(1) | WPAD_ButtonsDown(2) | WPAD_ButtonsDown(3); //Store pressed buttons
-
+		if (DownOrHeld == DI_BUTTONS_DOWN) {
+			pressed = WPAD_ButtonsDown(0) | WPAD_ButtonsDown(1) | WPAD_ButtonsDown(2) | WPAD_ButtonsDown(3); //Store pressed buttons
+		} else {
+			pressed = WPAD_ButtonsHeld(0) | WPAD_ButtonsHeld(1) | WPAD_ButtonsHeld(2) | WPAD_ButtonsHeld(3); //Store pressed buttons
+		}
+		
 		// Convert to wiimote values
 		if (pressed & WPAD_CLASSIC_BUTTON_ZR) pressed |= WPAD_BUTTON_PLUS;
 		if (pressed & WPAD_CLASSIC_BUTTON_ZL) pressed |= WPAD_BUTTON_MINUS;
@@ -157,24 +167,30 @@ u32 DetectInput(void) {
 
 	// Return Classic Controller and Wii Remote values
 	if (pressed) return pressed;
-	
+
 	// No buttons on the Wii remote or Classic Controller were pressed
 	if (PAD_ScanPads() > PAD_ERR_NONE)
 	{
-		pressed = PAD_ButtonsDown(0) | PAD_ButtonsDown(1) | PAD_ButtonsDown(2) | PAD_ButtonsDown(3);
-		if (pressed) {
+		if (DownOrHeld == DI_BUTTONS_HELD) {
+			gcpressed = PAD_ButtonsHeld(0) | PAD_ButtonsHeld(1) | PAD_ButtonsHeld(2) | PAD_ButtonsHeld(3); //Store pressed buttons
+		} else {
+			gcpressed = PAD_ButtonsDown(0) | PAD_ButtonsDown(1) | PAD_ButtonsDown(2) | PAD_ButtonsDown(3); //Store pressed buttons
+
+		}
+		
+		if (gcpressed) {
 			// Button on GC controller was pressed
-			if (pressed & PAD_TRIGGER_R) pressed |= WPAD_BUTTON_PLUS;
-			if (pressed & PAD_TRIGGER_L) pressed |= WPAD_BUTTON_MINUS;
-			if (pressed & PAD_BUTTON_A) pressed |= WPAD_BUTTON_A;
-			if (pressed & PAD_BUTTON_B) pressed |= WPAD_BUTTON_B;
-			if (pressed & PAD_BUTTON_X) pressed |= WPAD_BUTTON_1;
-			if (pressed & PAD_BUTTON_Y) pressed |= WPAD_BUTTON_2;
-			if (pressed & PAD_BUTTON_MENU) pressed |= WPAD_BUTTON_HOME;
-			if (pressed & PAD_BUTTON_UP) pressed |= WPAD_BUTTON_UP;
-			if (pressed & PAD_BUTTON_LEFT) pressed |= WPAD_BUTTON_LEFT;
-			if (pressed & PAD_BUTTON_DOWN) pressed |= WPAD_BUTTON_DOWN;
-			if (pressed & PAD_BUTTON_RIGHT) pressed |= WPAD_BUTTON_RIGHT;
+			if (gcpressed & PAD_TRIGGER_R) pressed |= WPAD_BUTTON_PLUS;
+			if (gcpressed & PAD_TRIGGER_L) pressed |= WPAD_BUTTON_MINUS;
+			if (gcpressed & PAD_BUTTON_A) pressed |= WPAD_BUTTON_A;
+			if (gcpressed & PAD_BUTTON_B) pressed |= WPAD_BUTTON_B;
+			if (gcpressed & PAD_BUTTON_X) pressed |= WPAD_BUTTON_1;
+			if (gcpressed & PAD_BUTTON_Y) pressed |= WPAD_BUTTON_2;
+			if (gcpressed & PAD_BUTTON_MENU) pressed |= WPAD_BUTTON_HOME;
+			if (gcpressed & PAD_BUTTON_UP) pressed |= WPAD_BUTTON_UP;
+			if (gcpressed & PAD_BUTTON_LEFT) pressed |= WPAD_BUTTON_LEFT;
+			if (gcpressed & PAD_BUTTON_DOWN) pressed |= WPAD_BUTTON_DOWN;
+			if (gcpressed & PAD_BUTTON_RIGHT) pressed |= WPAD_BUTTON_RIGHT;
 		}
 	}
 	return pressed;
@@ -412,7 +428,7 @@ void SysHackSettings( void )
 	while(1)
 	{
 		
-		u32 WPAD_Pressed = DetectInput();
+		u32 WPAD_Pressed = DetectInput(DI_BUTTONS_DOWN);
 
 #ifdef DEBUG
 		if (WPAD_Pressed & WPAD_BUTTON_HOME) exit(0);
@@ -752,7 +768,7 @@ void SysHackHashSettings( void )
 	bool redraw=true;
 	while(1)
 	{
-		u32 WPAD_Pressed = DetectInput();
+		u32 WPAD_Pressed = DetectInput(DI_BUTTONS_DOWN);
 
 		if ( WPAD_Pressed & WPAD_BUTTON_B ) break;
 
@@ -1057,7 +1073,7 @@ void SetSettings( void )
 	int redraw=true;
 	while(1)
 	{
-		u32 WPAD_Pressed = DetectInput();
+		u32 WPAD_Pressed = DetectInput(DI_BUTTONS_DOWN);
 
 		if ( WPAD_Pressed & WPAD_BUTTON_B )
 		{
@@ -1194,7 +1210,7 @@ void SetSettings( void )
 						PrintFormat( 1, TEXT_OFFSET("of your own wii. proceed? (A = Yes, B = No)"), 248, "of your own wii. proceed? (A = Yes, B = No)" );
 						while(1)
 						{
-							u32 WPAD_Pressed = DetectInput();
+							u32 WPAD_Pressed = DetectInput(DI_BUTTONS_DOWN);
 							
 							if(WPAD_Pressed & WPAD_BUTTON_A)
 							{
@@ -1227,7 +1243,7 @@ void SetSettings( void )
 						PrintFormat( 1, TEXT_OFFSET("off your own wii. proceed? (A = Yes, B = No)"), 248, "off your own wii. proceed? (A = Yes, B = No)" );
 						while(1)
 						{
-							u32 WPAD_Pressed = DetectInput();
+							u32 WPAD_Pressed = DetectInput(DI_BUTTONS_DOWN);
 							if(WPAD_Pressed & WPAD_BUTTON_A)
 							{
 								settings->PasscheckMenu = true;
@@ -2822,7 +2838,7 @@ void InstallLoadDOL( void )
 
 			redraw = false;
 		}
-		u32 WPAD_Pressed = DetectInput(); 
+		u32 WPAD_Pressed = DetectInput(DI_BUTTONS_DOWN); 
 		
 		if ( WPAD_Pressed & WPAD_BUTTON_B ) break;
 
@@ -3586,7 +3602,7 @@ void CheckForUpdate()
 			redraw = 0;
 		}
 
-		u32 WPAD_Pressed = DetectInput();
+		u32 WPAD_Pressed = DetectInput(DI_BUTTONS_DOWN);
 
 		if ( WPAD_Pressed & WPAD_BUTTON_B )	return;
 		
@@ -3690,7 +3706,7 @@ void CheckForUpdate()
 
 		while(1)
 		{
-			u32 WPAD_Pressed = DetectInput();
+			u32 WPAD_Pressed = DetectInput(DI_BUTTONS_DOWN);
 
 			if ( WPAD_Pressed & WPAD_BUTTON_A )
 			{
@@ -3997,7 +4013,7 @@ int main2(int argc, char **argv)
 #endif
 	while(1)
 	{
-		u32 WPAD_Pressed = DetectInput();
+		u32 WPAD_Pressed = DetectInput(DI_BUTTONS_DOWN);
  
 		if ( WPAD_Pressed & WPAD_BUTTON_A )
 		{
@@ -4318,7 +4334,7 @@ int main(int argc, char **argv)
 	//gprintf("ptr : 0x%08X data of ptr : 0x%08X size : %d\n",&system_state,*((u32*)&system_state),sizeof(system_state));
 	while(1)
 	{
-		u32 WPAD_Pressed = DetectInput();
+		u32 WPAD_Pressed = DetectInput(DI_BUTTONS_DOWN);
  
 		if ( WPAD_Pressed & WPAD_BUTTON_A )
 		{

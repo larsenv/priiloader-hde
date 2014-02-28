@@ -19,7 +19,7 @@ Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
 
 
 */
-#define DEBUG
+//#define DEBUG
 #define MAGIC_WORD_ADDRESS_1 0x8132FFFB
 #define MAGIC_WORD_ADDRESS_2 0x817FEFF0
 #define TEXT_OFFSET(X) ((((rmode->viWidth) / 2 ) - (sizeof((X))*13/2))>>1)
@@ -2138,6 +2138,7 @@ void BootMainSysMenu( u8 init )
 	s32 r = 0;
 	s32 fd = 0;
 	void	(*entrypoint)();
+	(void) entrypoint; // silences warning when DEBUG is disabled
 
 
 	if(init == 0)

@@ -24,6 +24,7 @@ Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
 #include "Global.h" // i hate to do this, but i need to if i want to prevent a crash when dumping gecko output & switching device. also, why the fuck does fopen succeed if not device is mounted?!
 u8 GeckoFound = 0;
 u8 DumpDebug = 0;
+static FILE* fd = NULL;
 
 void CheckForGecko( void )
 {
@@ -51,13 +52,12 @@ void gprintf( const char *str, ... )
 	// Convert now to tm struct for local timezone
 	localtm = localtime(&LeTime);
 	//cout << "The local date and time is: " << asctime(localtm) << endl;
-	char nstr[2048];
-	memset(nstr,0,2048);
-	snprintf(nstr,2048, "%d:%d:%d : %s",localtm->tm_hour,localtm->tm_min,localtm->tm_sec, str);
+	char nstr[2048] = {0};
+	snprintf(nstr,sizeof(nstr), "%d:%d:%d : %s",localtm->tm_hour,localtm->tm_min,localtm->tm_sec, str);
 
 	va_list ap;
 	va_start(ap,str);
-	size = vsnprintf( astr, 2047, nstr, ap );
+	size = vsnprintf( astr, sizeof(nstr), nstr, ap );
 	va_end(ap);
 
 	if(GeckoFound)
@@ -67,19 +67,14 @@ void gprintf( const char *str, ... )
 	}
 	if (DumpDebug > 0 && GetMountedValue() > 0)
 	{
-		FILE* fd = NULL;
-		fd = fopen("fat:/prii.log","ab");
 		if(fd != NULL);
 		{
 			//0x0D0A = \r\n
-			if(astr[strnlen(astr,2048)-1] == '\n' && astr[strnlen(astr,2048)-2] != '\r')
-			{
-				astr[strnlen(astr,2048)-1] = '\r';
-				astr[strnlen(astr,2048)] = '\n';
-				astr[strnlen(astr,2047)+1] = '\0';
-			}
-			fwrite(astr,1,size,fd);
-			fclose(fd);
+			va_list args;
+			va_start(args, str);
+			vfprintf(fd, str, args);
+			va_end(args);
+			fflush(fd);
 		}
 	}
 	return;
@@ -96,12 +91,12 @@ void SetDumpDebug( u8 value )
 	{
 		//create file, or re-open and add lining
 		FILE* fd = NULL;
-		fd = fopen("fat:/prii.log","ab");
+		if (fd == NULL) fd = fopen("fat:/prii.log","w+");
 		if(fd != NULL)
 		{
 			char str[] = "--------gecko_output_enabled------\r\n\0";
-			fwrite(str,1,strlen(str),fd);
-			fclose(fd);
+			fwrite(str,1,sizeof(str)-1,fd);
+			fflush(fd);
 		}
 		else
 		{

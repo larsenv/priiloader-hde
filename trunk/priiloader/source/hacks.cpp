@@ -580,6 +580,7 @@ s8 LoadHacks_Hash( bool Force_Load_Nand )
 		if( lbuf == NULL )
 		{
 			PrintFormat( 1, ((640/2)-((strlen("Syntax error : unexpected EOF @ line   "))*13/2))>>1, 208, "Syntax error : unexpected EOF @ line %d", line);
+			hacks.clear();
 			hacks_hash.clear();
 			sleep(5);
 			return 0;
@@ -590,6 +591,7 @@ s8 LoadHacks_Hash( bool Force_Load_Nand )
 			if( strstr( lbuf, "=" ) ==  NULL )
 			{
 				PrintFormat( 1, ((640/2)-((strlen("Syntax error : missing '=' before 'n' @ line   "))*13/2))>>1, 208, "Syntax error : missing '=' before 'n' @ line %d", line);
+				hacks.clear();
 				hacks_hash.clear();
 				sleep(5);
 				return 0;
@@ -598,12 +600,14 @@ s8 LoadHacks_Hash( bool Force_Load_Nand )
 			if( s == NULL )
 			{
 				PrintFormat( 1, ((640/2)-((strlen("Syntax error : missing value before 'n' @ line   "))*13/2))>>1, 208, "Syntax error : missing value before 'n' @ line %d", line);
+				hacks.clear();
 				hacks_hash.clear();
 				sleep(5);
 				return 0;
 			}
 		} else {
 			PrintFormat( 1, ((640/2)-((strlen("Syntax error : expected 'version' before 'n' @ line   "))*13/2))>>1, 208, "Syntax error : expected 'version' before 'n' @ line %d", line);
+			hacks.clear();
 			hacks_hash.clear();
 			sleep(5);
 			return 0;
@@ -614,6 +618,7 @@ s8 LoadHacks_Hash( bool Force_Load_Nand )
 		if( new_hacks_hash.max_version == 0 )
 		{
 			PrintFormat( 1, ((640/2)-((strlen("Error : maxversion is zero @ line   "))*13/2))>>1, 208, "Error : maxversion is zero @ line %d", line);
+			hacks.clear();
 			hacks_hash.clear();
 			sleep(5);
 			return 0;
@@ -625,6 +630,7 @@ s8 LoadHacks_Hash( bool Force_Load_Nand )
 		if( lbuf == NULL )
 		{
 			PrintFormat( 1, ((640/2)-((strlen("Syntax error : unexpected EOF @ line   "))*13/2))>>1, 208, "Syntax error : unexpected EOF @ line %d", line);
+			hacks.clear();
 			hacks_hash.clear();
 			sleep(5);
 			return 0;

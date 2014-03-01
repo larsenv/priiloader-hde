@@ -2834,8 +2834,8 @@ void InstallLoadDOL( void )
 				PrintFormat( cur_off==i, 16, 64+(i-min_pos+1)*16, "%s%s", app_list[i].app_name.c_str(),(read32(0x0d800064) == 0xFFFFFFFF && app_list[i].HW_AHBPROT_ENABLED != 0)?"(AHBPROT Available)":" ");
 			}
 			PrintFormat( 0, TEXT_OFFSET("A(A) Install File"), rmode->viHeight-64, "A(A) Install FIle");
-			PrintFormat( 0, TEXT_OFFSET("1(Z) Load File   "), rmode->viHeight-48, "1(Y) Load File");
-			PrintFormat( 0, TEXT_OFFSET("2(X) Delete installed File"), rmode->viHeight-32, "2(X) Delete installed File");
+			PrintFormat( 0, TEXT_OFFSET("1(X) Load File   "), rmode->viHeight-48, "1(X) Load File");
+			PrintFormat( 0, TEXT_OFFSET("2(Y) Delete installed File"), rmode->viHeight-32, "2(Y) Delete installed File");
 
 			redraw = false;
 		}

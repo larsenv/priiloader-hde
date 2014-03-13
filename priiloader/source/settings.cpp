@@ -47,6 +47,7 @@ static u32 Create_Settings_File( void )
 	settings->UseSystemMenuIOS = 1;
 	settings->autoboot = AUTOBOOT_SYS;
 	settings->BlackBackground = 1;
+	settings->UseClassicHacks = 0;
 	fd = ISFS_Open("/title/00000001/00000002/data/loader.ini", ISFS_OPEN_WRITE );
 	if( fd < 0 )
 	{

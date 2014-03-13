@@ -180,6 +180,7 @@ u32 DetectInput(u8 DownOrHeld) {
 		
 		if (gcpressed) {
 			// Button on GC controller was pressed
+			if (gcpressed & PAD_TRIGGER_Z) pressed |= WPAD_NUNCHUK_BUTTON_Z;
 			if (gcpressed & PAD_TRIGGER_R) pressed |= WPAD_BUTTON_PLUS;
 			if (gcpressed & PAD_TRIGGER_L) pressed |= WPAD_BUTTON_MINUS;
 			if (gcpressed & PAD_BUTTON_A) pressed |= WPAD_BUTTON_A;
@@ -445,6 +446,7 @@ void SysHackSettings( void )
 				if (Mounted != 0)
 				{
 					in = fopen ("fat:/apps/priiloader/hacks.ini","rb");
+					if (in == NULL) fopen ("fat:/hacks.ini","rb");
 				}
 				else
 				{
